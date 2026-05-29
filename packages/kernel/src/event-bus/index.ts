@@ -1,2 +1,2 @@
-export * from './event-bus.js';
-export * from './outbox.js';
+export * from './event-bus';
+export * from './outbox';

@@ -1,2 +1,2 @@
-export * from './document.js';
-export * from './doc-flow.js';
+export * from './document';
+export * from './doc-flow';

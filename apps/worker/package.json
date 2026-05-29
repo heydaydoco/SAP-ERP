@@ -11,9 +11,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@erp/db": "workspace:*",
     "@erp/kernel": "workspace:*",
     "@erp/shared": "workspace:*",
     "bullmq": "^5.34.5",
+    "drizzle-orm": "^0.38.3",
     "ioredis": "^5.4.2"
   },
   "devDependencies": {

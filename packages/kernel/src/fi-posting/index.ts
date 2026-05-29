@@ -1,2 +1,2 @@
-export * from './balance.js';
-export * from './fi-posting.js';
+export * from './balance';
+export * from './fi-posting';

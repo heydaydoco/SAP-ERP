@@ -38,8 +38,11 @@ packages/trade-data    HS CSV · FTA agreements · SPL lists
 
 ## 3. Global rules (non-negotiable, every domain)
 
-1. **Money = `NUMERIC(18,2)`**. Never `float`/`double` for amounts. Quantities/rates may use
-   higher scale (e.g. `NUMERIC(18,6)`) but money is always (18,2). Currency is a separate column.
+1. **Money is currency-aware, stored `NUMERIC(18,4)`.** Never `float`/`double`. Every amount travels
+   with its ISO-4217 currency code; decimal places are **per-currency** (minor-unit exponent:
+   KRW/JPY=0, USD/EUR/CNY=2, BHD/KWD=3) sourced from the currency master — **never hard-code 2
+   "cents."** Compute through the kernel `Money` value object (exact integer minor units), persist as
+   `NUMERIC(18,4)` (headroom over the 3-decimal max + rounding). Quantities/rates may use higher scale.
 2. **Every transaction flows through `fi-posting`.** A module that moves value MUST emit a
    balanced double-entry journal via the kernel fi-posting service. Never write GL accounts ad-hoc.
 3. **`snake_case`** for all DB identifiers (tables, columns, enums, constraints).

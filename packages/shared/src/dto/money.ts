@@ -1,13 +1,14 @@
 import { z } from 'zod';
 
 /**
- * Money is `NUMERIC(18,2)` in the DB and a **decimal string** in transit/code — never a JS number
- * (floats corrupt money). Pair every money value with a currency code (ISO 4217).
+ * Wire/DTO representation of money: a **decimal string** at the DB scale `NUMERIC(18,4)` — never a
+ * JS number (floats corrupt money). Always paired with a currency code (ISO 4217). Computation uses
+ * the currency-aware `Money` value object in `@erp/kernel`; this schema is only the transport shape.
  */
 export const moneySchema = z
   .string()
-  .regex(/^-?\d{1,16}(\.\d{1,2})?$/, 'money must be a decimal string with up to 2 fraction digits');
-export type Money = z.infer<typeof moneySchema>;
+  .regex(/^-?\d{1,14}(\.\d{1,4})?$/, 'money must be a decimal string, NUMERIC(18,4)');
+export type MoneyString = z.infer<typeof moneySchema>;
 
 /** ISO 4217 currency code (3 upper-case letters). */
 export const currencyCodeSchema = z.string().length(3).regex(/^[A-Z]{3}$/);
