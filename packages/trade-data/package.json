@@ -1,0 +1,14 @@
+{
+  "name": "@erp/trade-data",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Reference trade data: HS code CSVs, FTA agreement tables, SPL (sanctioned party) lists.",
+  "type": "module",
+  "exports": {
+    "./hs/*": "./hs/*",
+    "./fta/*": "./fta/*",
+    "./spl/*": "./spl/*"
+  },
+  "files": ["hs", "fta", "spl"]
+}

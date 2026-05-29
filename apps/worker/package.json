@@ -1,0 +1,24 @@
+{
+  "name": "@erp/worker",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --watch --experimental-strip-types src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@erp/kernel": "workspace:*",
+    "@erp/shared": "workspace:*",
+    "bullmq": "^5.34.5",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "@erp/config": "workspace:*",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  }
+}

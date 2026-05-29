@@ -1,0 +1,13 @@
+{
+  "extends": "@erp/config/tsconfig/library.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "composite": false
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

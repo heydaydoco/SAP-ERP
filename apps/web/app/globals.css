@@ -1,0 +1,13 @@
+@import '@erp/ui/styles.css';
+
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
