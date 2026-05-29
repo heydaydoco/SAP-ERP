@@ -1,0 +1,26 @@
+{
+  "name": "@erp/config",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "exports": {
+    "./tsconfig/base.json": "./tsconfig/base.json",
+    "./tsconfig/library.json": "./tsconfig/library.json",
+    "./tsconfig/nextjs.json": "./tsconfig/nextjs.json",
+    "./tsconfig/nestjs.json": "./tsconfig/nestjs.json",
+    "./eslint": "./eslint.config.mjs",
+    "./prettier": "./prettier.config.mjs"
+  },
+  "files": [
+    "tsconfig",
+    "eslint.config.mjs",
+    "prettier.config.mjs"
+  ],
+  "dependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.14.0",
+    "typescript-eslint": "^8.20.0"
+  }
+}
