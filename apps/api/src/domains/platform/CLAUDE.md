@@ -21,19 +21,31 @@
 - `job-monitor`
 
 ## Status
-🟦 **Scaffold only.** No tables, services, or controllers yet — see `@docs/phase-plan.md` for when
-this domain is built and fill the sections below at that time.
+🟧 **In progress (Phase 0).** Shipped: `doc-flow`, `outbox`, event bus (PR #2); `numbering`,
+`auth`, `rbac` (this PR). Remaining: `org-structure`, `admin-config` (+ fiscal-period/account
+determination), `workflow`, `notification`, `file-storage`, `audit-log`, `i18n`, `data-migration`,
+`output-forms`, `job-monitor`.
 
-> **Note:** Phase 0 domain. Builds the kernel-backed plumbing (RBAC `domain:subject:action`, Number Range, fiscal-period control in admin-config) every other domain depends on.
+> **Note:** Phase 0 domain. Builds the kernel-backed plumbing (RBAC `domain:subject:action`, Number
+> Range, fiscal-period control in admin-config) every other domain depends on.
 
 ## Domain rules
-_(domain-specific rules, invariants, and terminology — TBD)_
+- **Permissions** are `domain:subject:action` strings; `*` = superuser. Enforced globally by
+  `JwtAuthGuard` → `PermissionsGuard`. Routes are authenticated by default — opt out with `@Public()`,
+  opt into authorization with `@RequirePermissions(...)`. Grants are re-read from the DB on each
+  login/refresh and embedded in the access token.
+- **Numbering** is gap-free: `NumberingService.next(object, scope)` does an atomic increment +
+  RETURNING (row lock serializes callers). One counter per `(object, scope)`; `scope` partitions by
+  year/org. Every document `doc_no` comes from here — never ad-hoc.
+- **Passwords** are bcrypt-hashed; plaintext is never stored or logged (§5.3).
 
 ## Key tables
-_(core entities; extend the kernel document framework, add the audit-4 columns — TBD)_
+- `app_user` (login account; password hash only) · `role` · `role_permission`
+  (`domain:subject:action`) · `user_role` · `number_range` (counter per object/scope).
+- From PR #2: `doc_flow`, `outbox`.
 
 ## FI postings
-_(which events post to the GL and the debit/credit pattern via fi-posting — TBD)_
+_(none — platform is infrastructure)_
 
 ## Domain events
-_(events published / subscribed on the bus — TBD)_
+_(none yet; the in-process bus + Outbox relay are provided here for other domains to use)_
