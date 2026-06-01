@@ -3,7 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -18,6 +17,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@erp/kernel": "workspace:*",
     "drizzle-orm": "^0.38.3",
     "postgres": "^3.4.5"
   },

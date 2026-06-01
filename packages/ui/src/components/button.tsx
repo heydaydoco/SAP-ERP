@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { cn } from '../lib/utils.js';
+import { cn } from '../lib/utils';
 
 // Seed shadcn/ui component so the package compiles and sets the pattern. More components are
 // generated via the shadcn CLI in Phase 0+ as screens need them.

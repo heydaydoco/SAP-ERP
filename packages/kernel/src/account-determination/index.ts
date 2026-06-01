@@ -1,1 +1,1 @@
-export * from './account-determination.js';
+export * from './account-determination';

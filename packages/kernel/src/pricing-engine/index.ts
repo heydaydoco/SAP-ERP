@@ -1,1 +1,1 @@
-export * from './pricing-engine.js';
+export * from './pricing-engine';

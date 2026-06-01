@@ -1,5 +1,5 @@
 import type { CurrencyCode } from '@erp/shared';
-import type { PostingLine } from './balance.js';
+import type { PostingLine } from './balance';
 
 /**
  * fi-posting service (root CLAUDE.md §3.2, §5.1, §5.2).
