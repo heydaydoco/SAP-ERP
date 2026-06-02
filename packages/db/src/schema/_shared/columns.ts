@@ -1,10 +1,17 @@
 import { char, integer, numeric, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
-import { MONEY_DB_PRECISION, MONEY_DB_SCALE } from '@erp/kernel';
 
 /**
  * Shared column builders — the physical contract behind the global rules (root CLAUDE.md §3).
  * Every table composes these so the rules are defined once, never re-implemented per table.
  */
+
+/**
+ * Money DB precision/scale. NUMERIC(18,4) holds every currency exactly (root CLAUDE.md §3.1).
+ * Must stay in sync with the kernel `Money` value object's `MONEY_DB_SCALE` (which serializes to
+ * this scale). The DB layer owns no other dependency, so the constant lives here.
+ */
+export const MONEY_DB_PRECISION = 18;
+export const MONEY_DB_SCALE = 4;
 
 /** UUID primary key, server-generated. */
 export const pk = () => uuid('id').primaryKey().defaultRandom();

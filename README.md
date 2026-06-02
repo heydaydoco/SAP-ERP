@@ -35,14 +35,26 @@ pnpm install
 cp .env.example .env
 pnpm infra:up         # PostgreSQL 16 + Redis 7 via docker compose
 
-pnpm dev              # all apps
-pnpm test:unit        # Vitest unit tests
-pnpm test:integration # Testcontainers (needs Docker)
+pnpm dev              # all apps (turbo builds workspace packages first)
+pnpm test:unit        # Vitest unit tests (no build needed)
+pnpm test:integration # Testcontainers (needs Docker; no build needed)
 pnpm test:e2e         # Playwright (boots web)
 pnpm typecheck && pnpm lint
 ```
 
+### Run the API/worker against the DB
+
+Workspace packages compile to **CommonJS `dist`**, so build once before running `node dist`
+(seed, start). Tests don't need this (Vitest aliases packages to source).
+
+```bash
+pnpm build                          # all packages + apps → dist
+pnpm --filter @erp/db db:migrate    # apply migrations
+pnpm --filter @erp/api seed         # admin user + ADMIN role + demo number ranges (idempotent)
+pnpm --filter @erp/api start        # node dist/main.js
+```
+
 ## Status
 
-🟦 **Foundation scaffold only.** No domain/app code yet — Phase 0 (platform) starts next.
-See `docs/phase-plan.md`.
+🟧 **Phase 0 in progress** (platform). Foundation + kernel, doc-flow/outbox/event bus, numbering,
+auth (JWT), rbac (CASL) are in. See `docs/phase-plan.md`.
