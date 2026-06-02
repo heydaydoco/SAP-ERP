@@ -15,6 +15,13 @@
       "when": 1780303323801,
       "tag": "0001_parched_vertigo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780388470228,
+      "tag": "0002_dashing_rocket_racer",
+      "breakpoints": true
     }
   ]
 }

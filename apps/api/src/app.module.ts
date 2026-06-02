@@ -6,6 +6,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { AuthModule } from './domains/platform/auth/auth.module.js';
 import { JwtAuthGuard } from './domains/platform/auth/jwt-auth.guard.js';
 import { NumberingModule } from './domains/platform/numbering/numbering.module.js';
+import { OrgStructureModule } from './domains/platform/org-structure/org-structure.module.js';
 import { PlatformModule } from './domains/platform/platform.module.js';
 import { PermissionsGuard } from './domains/platform/rbac/permissions.guard.js';
 import { RbacModule } from './domains/platform/rbac/rbac.module.js';
@@ -26,6 +27,7 @@ import { HealthController } from './health.controller.js';
     NumberingModule,
     RbacModule,
     AuthModule,
+    OrgStructureModule,
   ],
   controllers: [HealthController],
   providers: [
