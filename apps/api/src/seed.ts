@@ -5,6 +5,8 @@ import { UsersService } from './domains/platform/auth/users.service.js';
 import { RbacService } from './domains/platform/rbac/rbac.service.js';
 import { NumberingService } from './domains/platform/numbering/numbering.service.js';
 import { OrgStructureService } from './domains/platform/org-structure/org-structure.service.js';
+import { FiscalPeriodService } from './domains/platform/admin-config/fiscal-period.service.js';
+import { AccountDeterminationService } from './domains/platform/admin-config/account-determination.service.js';
 
 /**
  * Idempotent dev seed: creates an ADMIN role (permission `*`), an admin user, and a couple of demo
@@ -20,6 +22,8 @@ async function seed(): Promise<void> {
     const rbac = app.get(RbacService);
     const numbering = app.get(NumberingService);
     const org = app.get(OrgStructureService);
+    const fiscal = app.get(FiscalPeriodService);
+    const accounts = app.get(AccountDeterminationService);
 
     const username = process.env.ADMIN_USERNAME ?? 'admin';
     const password = process.env.ADMIN_PASSWORD ?? 'admin123';
@@ -77,9 +81,21 @@ async function seed(): Promise<void> {
       companyCodeId,
     });
 
+    // Admin-config: fiscal year 2026 (12 OPEN periods) + account-determination rules for the
+    // SD-billing posting (AR / sales revenue / output VAT). Idempotent.
+    await fiscal.generateYear(companyCodeId, 2026);
+    for (const rule of [
+      { transactionKey: 'AR', glAccount: '1100' }, // 외상매출금
+      { transactionKey: 'SALES_REVENUE', glAccount: '4000' }, // 제품매출
+      { transactionKey: 'OUTPUT_VAT', glAccount: '2550' }, // 부가세예수금
+    ]) {
+      await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
+    }
+
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
-        `enterprise structure (company 1000 / plant 1010 / sloc 101A)`,
+        `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `fiscal year 2026 (12 open periods) + KR01 account determination`,
     );
   } finally {
     await app.close();
