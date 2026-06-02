@@ -197,9 +197,6 @@ importers:
 
   packages/db:
     dependencies:
-      '@erp/kernel':
-        specifier: workspace:*
-        version: link:../kernel
       drizzle-orm:
         specifier: ^0.38.3
         version: 0.38.4(@types/react@19.2.15)(postgres@3.4.9)(react@19.2.6)
