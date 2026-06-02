@@ -3,3 +3,4 @@ export * from './outbox';
 export * from './auth';
 export * from './rbac';
 export * from './numbering';
+export * from './org-structure';
