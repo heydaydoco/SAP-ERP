@@ -7,6 +7,10 @@ import { NumberingService } from './domains/platform/numbering/numbering.service
 import { OrgStructureService } from './domains/platform/org-structure/org-structure.service.js';
 import { FiscalPeriodService } from './domains/platform/admin-config/fiscal-period.service.js';
 import { AccountDeterminationService } from './domains/platform/admin-config/account-determination.service.js';
+import { CurrencyService } from './domains/master-data/currency/currency.service.js';
+import { GlAccountService } from './domains/master-data/gl-account/gl-account.service.js';
+import { TaxCodeService } from './domains/master-data/tax-code/tax-code.service.js';
+import { CostCenterService } from './domains/master-data/cost-center/cost-center.service.js';
 
 /**
  * Idempotent dev seed: creates an ADMIN role (permission `*`), an admin user, and a couple of demo
@@ -24,6 +28,10 @@ async function seed(): Promise<void> {
     const org = app.get(OrgStructureService);
     const fiscal = app.get(FiscalPeriodService);
     const accounts = app.get(AccountDeterminationService);
+    const currencies = app.get(CurrencyService);
+    const glAccounts = app.get(GlAccountService);
+    const taxCodes = app.get(TaxCodeService);
+    const costCenters = app.get(CostCenterService);
 
     const username = process.env.ADMIN_USERNAME ?? 'admin';
     const password = process.env.ADMIN_PASSWORD ?? 'admin123';
@@ -92,10 +100,70 @@ async function seed(): Promise<void> {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
 
+    // Master data: currencies (with exact minor units), demo fx rates, the KR01 GL accounts the
+    // determination rules above resolve to, VAT codes, and a cost center. Idempotent.
+    for (const cur of [
+      { code: 'KRW', name: 'South Korean Won', minorUnit: 0, symbol: '₩' },
+      { code: 'USD', name: 'US Dollar', minorUnit: 2, symbol: '$' },
+      { code: 'EUR', name: 'Euro', minorUnit: 2, symbol: '€' },
+      { code: 'CNY', name: 'Chinese Yuan', minorUnit: 2, symbol: '¥' },
+      { code: 'JPY', name: 'Japanese Yen', minorUnit: 0, symbol: '¥' },
+    ]) {
+      await currencies.ensureCurrency(cur);
+    }
+    for (const fx of [
+      { fromCurrency: 'USD', toCurrency: 'KRW', rate: '1350.000000' },
+      { fromCurrency: 'EUR', toCurrency: 'KRW', rate: '1450.000000' },
+    ]) {
+      await currencies.ensureFxRate({ rateType: 'M', validFrom: '2026-01-01', ...fx });
+    }
+    for (const acc of [
+      { accountNumber: '1000', name: '현금및현금성자산', accountType: 'ASSET' as const },
+      {
+        accountNumber: '1100',
+        name: '외상매출금',
+        accountType: 'ASSET' as const,
+        isReconciliation: true,
+      },
+      {
+        accountNumber: '2100',
+        name: '외상매입금',
+        accountType: 'LIABILITY' as const,
+        isReconciliation: true,
+      },
+      { accountNumber: '2550', name: '부가세예수금', accountType: 'LIABILITY' as const },
+      { accountNumber: '4000', name: '제품매출', accountType: 'REVENUE' as const },
+    ]) {
+      await glAccounts.ensureGlAccount({
+        chartOfAccounts: 'KR01',
+        isReconciliation: false,
+        ...acc,
+      });
+    }
+    for (const tax of [
+      {
+        code: 'V10',
+        name: '매출 부가세 10%',
+        kind: 'OUTPUT' as const,
+        ratePercent: '10',
+        glAccount: '2550',
+      },
+      { code: 'A10', name: '매입 부가세 10%', kind: 'INPUT' as const, ratePercent: '10' },
+    ]) {
+      await taxCodes.ensureTaxCode(tax);
+    }
+    await costCenters.ensureCostCenter({
+      code: '1000',
+      name: 'Administration',
+      companyCodeId,
+      validFrom: '2026-01-01',
+    });
+
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
         `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
-        `fiscal year 2026 (12 open periods) + KR01 account determination`,
+        `fiscal year 2026 (12 open periods) + KR01 account determination + ` +
+        `master data (5 currencies / 2 fx rates / 5 GL accounts / 2 tax codes / cost center 1000)`,
     );
   } finally {
     await app.close();
