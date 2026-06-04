@@ -50,6 +50,13 @@
       "when": 1780555490544,
       "tag": "0006_smooth_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780560901104,
+      "tag": "0007_lazy_corsair",
+      "breakpoints": true
     }
   ]
 }
