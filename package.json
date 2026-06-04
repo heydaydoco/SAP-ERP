@@ -21,6 +21,7 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "db:generate": "pnpm --filter @erp/db db:generate",
     "db:migrate": "pnpm --filter @erp/db db:migrate",
+    "seed": "pnpm --filter @erp/api seed",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down"
   },
