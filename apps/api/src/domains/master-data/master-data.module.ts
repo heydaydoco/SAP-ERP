@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { BusinessPartnerController } from './business-partner/business-partner.controller.js';
+import { BusinessPartnerService } from './business-partner/business-partner.service.js';
 import { CurrencyController } from './currency/currency.controller.js';
 import { CurrencyService } from './currency/currency.service.js';
 import { DbCurrencyRegistry } from './currency/db-currency-registry.js';
@@ -10,10 +12,10 @@ import { TaxCodeController } from './tax-code/tax-code.controller.js';
 import { TaxCodeService } from './tax-code/tax-code.service.js';
 
 /**
- * Master-data domain module (Phase 1). Ships the FI-foundation masters — currency/fx-rate,
- * gl-account, tax-code, cost-center — that finance-accounting (Phase 2) sits on. `DbCurrencyRegistry`
- * feeds the kernel `Money` object exact minor units from the DB (root CLAUDE.md §3.1). Services are
- * exported so the seed can populate demo data. material + business-partner land in the next PR.
+ * Master-data domain module (Phase 1). FI-foundation masters — currency/fx-rate, gl-account,
+ * tax-code, cost-center (slice 1) — plus business-partner (slice 2; customer/vendor roles for
+ * Phase 2 AR/AP). `DbCurrencyRegistry` feeds the kernel `Money` object exact minor units from the DB
+ * (root CLAUDE.md §3.1). Services are exported so the seed can populate demo data. material is next.
  */
 @Module({
   providers: [
@@ -22,14 +24,22 @@ import { TaxCodeService } from './tax-code/tax-code.service.js';
     GlAccountService,
     TaxCodeService,
     CostCenterService,
+    BusinessPartnerService,
   ],
-  controllers: [CurrencyController, GlAccountController, TaxCodeController, CostCenterController],
+  controllers: [
+    CurrencyController,
+    GlAccountController,
+    TaxCodeController,
+    CostCenterController,
+    BusinessPartnerController,
+  ],
   exports: [
     DbCurrencyRegistry,
     CurrencyService,
     GlAccountService,
     TaxCodeService,
     CostCenterService,
+    BusinessPartnerService,
   ],
 })
 export class MasterDataModule {}
