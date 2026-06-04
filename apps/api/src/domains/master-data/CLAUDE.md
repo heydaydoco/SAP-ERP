@@ -10,16 +10,18 @@
 - `gl-account` ✅ — chart of accounts (계정과목)
 - `tax-code` ✅ — VAT codes (부가세)
 - `cost-center` ✅ — CO cost object (코스트센터)
-- `material` · `business-partner` — next PR (Phase 1, slice 2)
+- `business-partner` ✅ — SAP BP core + customer/vendor roles (거래처)
+- `material` — next slice (Phase 1, slice 3)
 - `bom` · `profit-center` · `bank-master` · `uom` · `pricing-condition` — later
 
 ## Status
-🟧 **In progress (Phase 1, slice 1 of 2).** Shipped: the FI-foundation masters
-(currency/fx-rate · gl-account · tax-code · cost-center) that finance-accounting (Phase 2) sits on.
-Remaining for Phase 1: `material` (+ trade extension), `business-partner` (+ customer/vendor roles).
+🟧 **In progress (Phase 1).** Shipped: the FI-foundation masters (currency/fx-rate · gl-account ·
+tax-code · cost-center) and `business-partner` (core + customer/vendor roles). Remaining for Phase 1:
+`material` (+ trade extension). carrier/bank roles arrive with logistics-4pl / bank-master later.
 
-> **Note:** Use the master extension/role pattern (§4.4): core master + per-domain extension tables
-> (material→sales/purchasing/mrp/trade; BP→customer/vendor/carrier). Applies to the next slice.
+> **Note:** Use the master extension/role pattern (§4.4): core master + per-domain extension tables.
+> business-partner applies it (core BP → `customer` (AR) / `vendor` (AP) role tables); material
+> (next) will do the same (material → sales/purchasing/mrp/trade).
 
 ## Domain rules
 - **Currency master is the source of minor-unit exponents (§3.1).** `DbCurrencyRegistry` implements
@@ -34,12 +36,17 @@ Remaining for Phase 1: `material` (+ trade extension), `business-partner` (+ cus
   fi-posting (Phase 2) uses it to validate journal-line debit/credit indicators.
 - **Tax + FX are unit-tested calc paths (§5.4).** Tax rounds through `Money.percentage`; FX
   resolution is the pure `resolveFxRate(candidates, onDate)` helper (latest valid_from ≤ date).
+- **BP roles are 1:1 extension tables, not a type.** A partner gets a `customer` and/or `vendor` row
+  (one each, `bp_id` unique). A role's reconciliation account must exist in `gl_account` before it can
+  be attached. Bank details stay out of `vendor` (bank-master later) to avoid duplicating PIPA data (§5.3).
 
 ## Key tables
 - `currency` (code, minor_unit, symbol) · `fx_rate` (from/to/rate_type/valid_from → rate numeric(18,6))
 - `gl_account` (chart_of_accounts + account_number unique; account_type enum; is_reconciliation)
 - `tax_code` (code, kind OUTPUT/INPUT, rate_percent, gl_account)
 - `cost_center` (company_code_id + code unique; valid_from/valid_to; responsible)
+- `business_partner` (code unique; bp_type ORGANIZATION/PERSON) · `customer` (bp_id unique;
+  ar_recon_account; credit_limit) · `vendor` (bp_id unique; ap_recon_account)
 
 ## FI postings
 _(none — master data is referenced by FI postings; it does not itself post to the GL)_
@@ -49,4 +56,5 @@ _(none yet)_
 
 ## Permissions
 `master_data:<subject>:<action>` — subjects `currency`, `fx_rate`, `gl_account`, `tax_code`,
-`cost_center`; actions `read`, `create`. (The ADMIN role's `*` grant covers them.)
+`cost_center`, `business_partner`; actions `read`, `create`, plus `manage_role` on
+`business_partner` (attach customer/vendor roles). (The ADMIN role's `*` grant covers them.)

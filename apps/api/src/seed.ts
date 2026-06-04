@@ -11,6 +11,7 @@ import { CurrencyService } from './domains/master-data/currency/currency.service
 import { GlAccountService } from './domains/master-data/gl-account/gl-account.service.js';
 import { TaxCodeService } from './domains/master-data/tax-code/tax-code.service.js';
 import { CostCenterService } from './domains/master-data/cost-center/cost-center.service.js';
+import { BusinessPartnerService } from './domains/master-data/business-partner/business-partner.service.js';
 
 /**
  * Idempotent dev seed: creates an ADMIN role (permission `*`), an admin user, and a couple of demo
@@ -32,6 +33,7 @@ async function seed(): Promise<void> {
     const glAccounts = app.get(GlAccountService);
     const taxCodes = app.get(TaxCodeService);
     const costCenters = app.get(CostCenterService);
+    const partners = app.get(BusinessPartnerService);
 
     const username = process.env.ADMIN_USERNAME ?? 'admin';
     const password = process.env.ADMIN_PASSWORD ?? 'admin123';
@@ -159,11 +161,40 @@ async function seed(): Promise<void> {
       validFrom: '2026-01-01',
     });
 
+    // Business partners: a customer (AR recon 1100) and a vendor (AP recon 2100). Idempotent.
+    const customerBpId = await partners.ensureBp({
+      code: 'C1000',
+      name: 'Acme Retail Co., Ltd.',
+      bpType: 'ORGANIZATION',
+      country: 'KR',
+      city: 'Seoul',
+    });
+    await partners.ensureCustomerRole(customerBpId, {
+      arReconAccount: '1100',
+      creditLimit: '50000000.0000',
+      creditCurrency: 'KRW',
+      paymentTermsDays: 30,
+      salesBlock: false,
+    });
+    const vendorBpId = await partners.ensureBp({
+      code: 'V2000',
+      name: 'Shenzhen Components Ltd.',
+      bpType: 'ORGANIZATION',
+      country: 'CN',
+      city: 'Shenzhen',
+    });
+    await partners.ensureVendorRole(vendorBpId, {
+      apReconAccount: '2100',
+      paymentTermsDays: 45,
+      purchasingBlock: false,
+    });
+
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
         `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination + ` +
-        `master data (5 currencies / 2 fx rates / 5 GL accounts / 2 tax codes / cost center 1000)`,
+        `master data (5 currencies / 2 fx rates / 5 GL accounts / 2 tax codes / cost center 1000 / ` +
+        `2 business partners: customer C1000 + vendor V2000)`,
     );
   } finally {
     await app.close();
