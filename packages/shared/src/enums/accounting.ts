@@ -15,3 +15,20 @@ export const docStatusSchema = z.enum([
   'CANCELLED',
 ]);
 export type DocStatus = z.infer<typeof docStatusSchema>;
+
+/** GL account classification (master-data.gl-account). Determines the account's normal balance. */
+export const glAccountTypeSchema = z.enum(['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE']);
+export type GlAccountType = z.infer<typeof glAccountTypeSchema>;
+
+/**
+ * The side on which an account type increases (its normal balance): assets and expenses are debit-
+ * normal, liabilities/equity/revenue are credit-normal. fi-posting uses this to validate that a
+ * journal line's debit/credit indicator agrees with the account it hits.
+ */
+export function normalBalance(type: GlAccountType): DrCr {
+  return type === 'ASSET' || type === 'EXPENSE' ? 'D' : 'C';
+}
+
+/** VAT (부가세) direction for a tax code: OUTPUT = on sales (매출), INPUT = on purchases (매입). */
+export const taxKindSchema = z.enum(['OUTPUT', 'INPUT']);
+export type TaxKind = z.infer<typeof taxKindSchema>;

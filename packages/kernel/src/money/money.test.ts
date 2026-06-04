@@ -65,3 +65,29 @@ describe('Money — currency-aware minor units', () => {
     expect(() => Money.of('1.00', 'USD', reg)).toThrow(/unknown currency/);
   });
 });
+
+// percentage() is the single rounding path for tax + pricing (root CLAUDE.md §4.6, §5.4).
+describe('Money.percentage — rate rounding', () => {
+  it('rounds half away from zero to the currency minor unit (USD, 2 decimals)', () => {
+    expect(Money.of('1.99', 'USD').percentage('10').toDecimal()).toBe('0.20'); // 19.9¢ → 20¢
+    expect(Money.of('1.00', 'USD').percentage('10').toDecimal()).toBe('0.10');
+    expect(Money.of('0.05', 'USD').percentage('10').toDecimal()).toBe('0.01'); // 0.5¢ → 1¢ (half up)
+    expect(Money.of('0.04', 'USD').percentage('10').toDecimal()).toBe('0.00'); // 0.4¢ → 0¢
+  });
+
+  it('rounds to whole units for a 0-decimal currency (KRW)', () => {
+    expect(Money.of('15000', 'KRW').percentage('10').toDecimal()).toBe('1500');
+    expect(Money.of('15', 'KRW').percentage('10').toDecimal()).toBe('2'); // 1.5 → 2 (half up)
+    expect(Money.of('14', 'KRW').percentage('10').toDecimal()).toBe('1'); // 1.4 → 1
+  });
+
+  it('handles fractional and zero rates, and negatives symmetrically', () => {
+    expect(Money.of('100.00', 'USD').percentage('10.5').toDecimal()).toBe('10.50');
+    expect(Money.of('1.99', 'USD').percentage('0').toDecimal()).toBe('0.00');
+    expect(Money.of('-0.05', 'USD').percentage('10').toDecimal()).toBe('-0.01'); // away from zero
+  });
+
+  it('rejects malformed percentages', () => {
+    expect(() => Money.of('1.00', 'USD').percentage('abc')).toThrow(/invalid percentage/);
+  });
+});

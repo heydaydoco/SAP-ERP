@@ -3,6 +3,7 @@ import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 import { DatabaseModule } from './database/database.module.js';
+import { MasterDataModule } from './domains/master-data/master-data.module.js';
 import { AdminConfigModule } from './domains/platform/admin-config/admin-config.module.js';
 import { AuthModule } from './domains/platform/auth/auth.module.js';
 import { JwtAuthGuard } from './domains/platform/auth/jwt-auth.guard.js';
@@ -30,6 +31,7 @@ import { HealthController } from './health.controller.js';
     AuthModule,
     OrgStructureModule,
     AdminConfigModule,
+    MasterDataModule,
   ],
   controllers: [HealthController],
   providers: [

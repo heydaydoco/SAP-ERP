@@ -117,6 +117,32 @@ export class Money {
     return this.withMinorUnits(this.minorUnits - other.minorUnits);
   }
 
+  /**
+   * This amount times `percent`% — e.g. 10% output VAT of USD 1.99 → 0.20 (19.9¢ rounds to 20¢).
+   * Rounded **half away from zero** to the currency's minor unit. Tax codes and the pricing engine
+   * both call this so rate rounding lives in one place, never per-domain. `percent` is a decimal
+   * string/number in percentage points ('10', '10.5'); more than 6 fraction digits is rejected.
+   */
+  percentage(percent: string | number): Money {
+    const str = typeof percent === 'number' ? String(percent) : percent.trim();
+    if (!DECIMAL_RE.test(str)) throw new Error(`invalid percentage: "${str}"`);
+    const neg = str.startsWith('-');
+    const [intPart = '0', fracPart = ''] = str.replace('-', '').split('.');
+    const numerator = BigInt(intPart + fracPart) * (neg ? -1n : 1n);
+    const denominator = 100n * pow10(fracPart.length);
+    return this.multiplyRounded(numerator, denominator);
+  }
+
+  /** this.minorUnits * num / den, rounded half away from zero. `den` must be positive. */
+  private multiplyRounded(num: bigint, den: bigint): Money {
+    const negative = this.minorUnits < 0n !== num < 0n;
+    const abs = (x: bigint): bigint => (x < 0n ? -x : x);
+    const scaled = abs(this.minorUnits) * abs(num);
+    // floor((2*scaled + den) / (2*den)) rounds the magnitude half-up.
+    const rounded = (scaled * 2n + den) / (den * 2n);
+    return this.withMinorUnits(negative ? -rounded : rounded);
+  }
+
   negate(): Money {
     return this.withMinorUnits(-this.minorUnits);
   }
