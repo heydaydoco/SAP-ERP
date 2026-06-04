@@ -11,17 +11,18 @@
 - `tax-code` ✅ — VAT codes (부가세)
 - `cost-center` ✅ — CO cost object (코스트센터)
 - `business-partner` ✅ — SAP BP core + customer/vendor roles (거래처)
-- `material` — next slice (Phase 1, slice 3)
+- `material` ✅ — material core + trade extension (품목 + HS코드/무역속성)
 - `bom` · `profit-center` · `bank-master` · `uom` · `pricing-condition` — later
 
 ## Status
-🟧 **In progress (Phase 1).** Shipped: the FI-foundation masters (currency/fx-rate · gl-account ·
-tax-code · cost-center) and `business-partner` (core + customer/vendor roles). Remaining for Phase 1:
-`material` (+ trade extension). carrier/bank roles arrive with logistics-4pl / bank-master later.
+🟩 **Phase 1 complete.** Shipped: FI-foundation masters (currency/fx-rate · gl-account · tax-code ·
+cost-center), `business-partner` (core + customer/vendor roles), and `material` (core + trade
+extension). Next is **Phase 2 finance-accounting (FI)**. Deferred to later slices/domains: material
+sales/purchasing/mrp extensions, BP carrier/bank roles, uom · bom · profit-center · pricing-condition.
 
-> **Note:** Use the master extension/role pattern (§4.4): core master + per-domain extension tables.
-> business-partner applies it (core BP → `customer` (AR) / `vendor` (AP) role tables); material
-> (next) will do the same (material → sales/purchasing/mrp/trade).
+> **Note:** Master extension/role pattern (§4.4): core master + per-domain extension tables.
+> business-partner (core BP → `customer`/`vendor`) and material (core → `material_trade`) both apply
+> it; further material views (sales/purchasing/mrp) attach the same way when those domains arrive.
 
 ## Domain rules
 - **Currency master is the source of minor-unit exponents (§3.1).** `DbCurrencyRegistry` implements
@@ -47,6 +48,8 @@ tax-code · cost-center) and `business-partner` (core + customer/vendor roles). 
 - `cost_center` (company_code_id + code unique; valid_from/valid_to; responsible)
 - `business_partner` (code unique; bp_type ORGANIZATION/PERSON) · `customer` (bp_id unique;
   ar_recon_account; credit_limit) · `vendor` (bp_id unique; ap_recon_account)
+- `material` (code unique; material_type enum; base_uom; material_group) · `material_trade`
+  (material_id unique; hs_code; country_of_origin)
 
 ## FI postings
 _(none — master data is referenced by FI postings; it does not itself post to the GL)_
@@ -56,5 +59,6 @@ _(none yet)_
 
 ## Permissions
 `master_data:<subject>:<action>` — subjects `currency`, `fx_rate`, `gl_account`, `tax_code`,
-`cost_center`, `business_partner`; actions `read`, `create`, plus `manage_role` on
-`business_partner` (attach customer/vendor roles). (The ADMIN role's `*` grant covers them.)
+`cost_center`, `business_partner`, `material`; actions `read`, `create`, plus `manage_role` on
+`business_partner` and `manage_extension` on `material` (attach roles / trade extension).
+(The ADMIN role's `*` grant covers them.)

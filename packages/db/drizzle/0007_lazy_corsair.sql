@@ -1,0 +1,2 @@
+ALTER TABLE "material" ADD CONSTRAINT "material_weight_pair_ck" CHECK (("material"."net_weight" is null) = ("material"."weight_unit" is null));--> statement-breakpoint
+ALTER TABLE "material_trade" ADD CONSTRAINT "material_trade_hs_code_ck" CHECK ("material_trade"."hs_code" ~ '^[0-9]{6,10}$');

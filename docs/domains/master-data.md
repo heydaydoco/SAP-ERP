@@ -5,18 +5,19 @@
 
 ## Purpose
 
-The cross-application master records every other domain references. Phase 1 delivers it in
-**reviewable slices** (one PR each):
+The cross-application master records every other domain references. Phase 1 delivered it in
+**reviewable slices** (one PR each), now **complete**:
 
 1. **Slice 1 — FI-foundation masters:** currency/fx-rate, gl-account, tax-code, cost-center.
    What finance-accounting (Phase 2) and account-determination depend on.
 2. **Slice 2 — business-partner:** core BP + customer/vendor roles (§4.4). Sequenced before material
    because Phase 2 AR/AP depend on the BP roles.
-3. **Slice 3 (next) — material:** core material + trade extension (§4.4).
+3. **Slice 3 — material:** core material + trade extension (§4.4).
 
-Later (per architecture §②): bom, profit-center, bank-master, uom, pricing-condition.
+Next: **Phase 2 finance-accounting (FI)**. Later (per architecture §②): bom, profit-center,
+bank-master, uom, pricing-condition; material sales/purchasing/mrp views and BP carrier/bank roles.
 
-## Masters shipped (slices 1–2)
+## Masters shipped (slices 1–3)
 
 ### currency + fx_rate
 - `currency`: ISO-4217 `code` (natural key) · `name` · **`minor_unit`** (decimal places, 0–4) · `symbol`.
@@ -53,18 +54,28 @@ Later (per architecture §②): bom, profit-center, bank-master, uom, pricing-co
   `.../:id/vendor-role`. `GET .../:id` returns the partner with its roles.
 - carrier/bank roles arrive with logistics-4pl / bank-master later.
 
+### material (품목)
+- `material` (core): `code` (material number, natural key) · `name` · `material_type`
+  (FINISHED/SEMI_FINISHED/RAW/TRADING/SERVICE) · `base_uom` (unit code; uom master is later) ·
+  `material_group` · optional `net_weight` + `weight_unit`.
+- `material_trade` role (1:1, `material_id` unique): `hs_code` (관세 품목분류) · `country_of_origin` ·
+  `export_control_class`. Feeds trade-compliance (HS classification, FTA origin) later.
+- Flow: `POST /master-data/materials` (core) → `POST .../:id/trade-data`. `GET .../:id` returns the
+  material with its trade extension. sales/purchasing/mrp views attach the same way later.
+
 ## Conventions
 - Surrogate `uuid id`; `snake_case` DB identifiers; audit-4 columns on every table (§3.3, §3.4).
 - `create*` (409 on duplicate) for the API; idempotent `ensure*` for the seed.
 - Permissions `master_data:<subject>:<action>` (subjects: currency, fx_rate, gl_account, tax_code,
-  cost_center, business_partner; `manage_role` attaches BP roles). Secure-by-default via the global
-  JwtAuthGuard + PermissionsGuard.
+  cost_center, business_partner, material; `manage_role` attaches BP roles, `manage_extension`
+  attaches the material trade view). Secure-by-default via the global JwtAuthGuard + PermissionsGuard.
 
 ## Seed (demo)
 Currencies KRW(0)/USD(2)/EUR(2)/CNY(2)/JPY(0); fx USD→KRW, EUR→KRW (from 2026-01-01); KR01 GL accounts
 backing the existing determination rules (1100 AR / 4000 revenue / 2550 output-VAT) + 1000 cash /
 2100 AP; tax codes V10 (OUTPUT 10%) / A10 (INPUT 10%); cost center 1000 under company 1000; business
-partners customer C1000 (AR 1100, credit 50M KRW) + vendor V2000 (AP 2100).
+partners customer C1000 (AR 1100, credit 50M KRW) + vendor V2000 (AP 2100); materials FG-1000
+(FINISHED, HS 8471606000, origin KR) + RM-2000 (RAW).
 
 ## Tests
 `Money.percentage` (kernel), `normalBalance` (shared), `resolveFxRate` + `computeTax` (api) — all

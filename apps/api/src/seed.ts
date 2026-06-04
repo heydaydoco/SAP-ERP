@@ -12,6 +12,7 @@ import { GlAccountService } from './domains/master-data/gl-account/gl-account.se
 import { TaxCodeService } from './domains/master-data/tax-code/tax-code.service.js';
 import { CostCenterService } from './domains/master-data/cost-center/cost-center.service.js';
 import { BusinessPartnerService } from './domains/master-data/business-partner/business-partner.service.js';
+import { MaterialService } from './domains/master-data/material/material.service.js';
 
 /**
  * Idempotent dev seed: creates an ADMIN role (permission `*`), an admin user, and a couple of demo
@@ -34,6 +35,7 @@ async function seed(): Promise<void> {
     const taxCodes = app.get(TaxCodeService);
     const costCenters = app.get(CostCenterService);
     const partners = app.get(BusinessPartnerService);
+    const materials = app.get(MaterialService);
 
     const username = process.env.ADMIN_USERNAME ?? 'admin';
     const password = process.env.ADMIN_PASSWORD ?? 'admin123';
@@ -189,12 +191,34 @@ async function seed(): Promise<void> {
       purchasingBlock: false,
     });
 
+    // Materials: a finished good (with trade/HS data) and a raw material. Idempotent.
+    const finishedId = await materials.ensureMaterial({
+      code: 'FG-1000',
+      name: 'Wireless Keyboard K1',
+      materialType: 'FINISHED',
+      baseUom: 'EA',
+      materialGroup: 'ELEC',
+      netWeight: '0.450000',
+      weightUnit: 'KG',
+    });
+    await materials.ensureTradeData(finishedId, {
+      hsCode: '8471606000',
+      countryOfOrigin: 'KR',
+    });
+    await materials.ensureMaterial({
+      code: 'RM-2000',
+      name: 'ABS Resin Pellet',
+      materialType: 'RAW',
+      baseUom: 'KG',
+      materialGroup: 'CHEM',
+    });
+
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
         `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination + ` +
         `master data (5 currencies / 2 fx rates / 5 GL accounts / 2 tax codes / cost center 1000 / ` +
-        `2 business partners: customer C1000 + vendor V2000)`,
+        `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000)`,
     );
   } finally {
     await app.close();

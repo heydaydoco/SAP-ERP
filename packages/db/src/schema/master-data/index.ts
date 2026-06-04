@@ -3,3 +3,4 @@ export * from './gl-account';
 export * from './tax-code';
 export * from './cost-center';
 export * from './business-partner';
+export * from './material';
