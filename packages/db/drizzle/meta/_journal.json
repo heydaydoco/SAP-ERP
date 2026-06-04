@@ -43,6 +43,13 @@
       "when": 1780553392238,
       "tag": "0005_sweet_orphan",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780555490544,
+      "tag": "0006_smooth_loners",
+      "breakpoints": true
     }
   ]
 }

@@ -8,14 +8,17 @@ import { CostCenterController } from './cost-center/cost-center.controller.js';
 import { CostCenterService } from './cost-center/cost-center.service.js';
 import { GlAccountController } from './gl-account/gl-account.controller.js';
 import { GlAccountService } from './gl-account/gl-account.service.js';
+import { MaterialController } from './material/material.controller.js';
+import { MaterialService } from './material/material.service.js';
 import { TaxCodeController } from './tax-code/tax-code.controller.js';
 import { TaxCodeService } from './tax-code/tax-code.service.js';
 
 /**
- * Master-data domain module (Phase 1). FI-foundation masters — currency/fx-rate, gl-account,
- * tax-code, cost-center (slice 1) — plus business-partner (slice 2; customer/vendor roles for
- * Phase 2 AR/AP). `DbCurrencyRegistry` feeds the kernel `Money` object exact minor units from the DB
- * (root CLAUDE.md §3.1). Services are exported so the seed can populate demo data. material is next.
+ * Master-data domain module (Phase 1, complete). FI-foundation masters — currency/fx-rate,
+ * gl-account, tax-code, cost-center (slice 1) — plus business-partner (slice 2; customer/vendor roles
+ * for Phase 2 AR/AP) and material (slice 3; + trade extension). `DbCurrencyRegistry` feeds the kernel
+ * `Money` object exact minor units from the DB (§3.1). Services are exported so the seed can populate
+ * demo data. Next: Phase 2 finance-accounting (FI).
  */
 @Module({
   providers: [
@@ -25,6 +28,7 @@ import { TaxCodeService } from './tax-code/tax-code.service.js';
     TaxCodeService,
     CostCenterService,
     BusinessPartnerService,
+    MaterialService,
   ],
   controllers: [
     CurrencyController,
@@ -32,6 +36,7 @@ import { TaxCodeService } from './tax-code/tax-code.service.js';
     TaxCodeController,
     CostCenterController,
     BusinessPartnerController,
+    MaterialController,
   ],
   exports: [
     DbCurrencyRegistry,
@@ -40,6 +45,7 @@ import { TaxCodeService } from './tax-code/tax-code.service.js';
     TaxCodeService,
     CostCenterService,
     BusinessPartnerService,
+    MaterialService,
   ],
 })
 export class MasterDataModule {}
