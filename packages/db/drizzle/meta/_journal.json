@@ -57,6 +57,13 @@
       "when": 1780560901104,
       "tag": "0007_lazy_corsair",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780645865631,
+      "tag": "0008_misty_the_call",
+      "breakpoints": true
     }
   ]
 }

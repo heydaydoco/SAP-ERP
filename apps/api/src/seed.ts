@@ -59,6 +59,14 @@ async function seed(): Promise<void> {
       prefix: 'PO-',
       padding: 6,
     });
+    // FI journal numbers reset per fiscal year (scope = year; the year also rides the prefix
+    // because scope only partitions the counter, it is not rendered). New year → new range.
+    await numbering.defineRange({
+      object: 'finance.journal_entry',
+      scope: '2026',
+      prefix: 'JE-2026-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.

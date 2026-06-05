@@ -15,3 +15,13 @@ export function createDb(connectionString = process.env.DATABASE_URL) {
 }
 
 export type Database = ReturnType<typeof createDb>;
+
+/** A live transaction handle from `db.transaction(cb)` — same query interface as the client. */
+export type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/**
+ * Either the shared client or an active transaction. Platform services that domains call from
+ * inside a posting transaction (numbering, outbox, doc-flow) accept this as an optional last
+ * parameter so their writes commit atomically with the caller's (root CLAUDE.md §5.2).
+ */
+export type DbExecutor = Database | Transaction;

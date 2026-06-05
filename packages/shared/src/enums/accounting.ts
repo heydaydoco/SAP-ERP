@@ -22,8 +22,9 @@ export type GlAccountType = z.infer<typeof glAccountTypeSchema>;
 
 /**
  * The side on which an account type increases (its normal balance): assets and expenses are debit-
- * normal, liabilities/equity/revenue are credit-normal. fi-posting uses this to validate that a
- * journal line's debit/credit indicator agrees with the account it hits.
+ * normal, liabilities/equity/revenue are credit-normal. This is a PRESENTATION/reporting concept
+ * (trial-balance and statement signs), NOT a posting gate — both sides are legal on any account
+ * (crediting an asset is how it decreases). fi-posting never rejects a line on normal balance.
  */
 export function normalBalance(type: GlAccountType): DrCr {
   return type === 'ASSET' || type === 'EXPENSE' ? 'D' : 'C';

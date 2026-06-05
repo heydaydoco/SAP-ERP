@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
-import { schema, type Database } from '@erp/db';
+import { schema, type Database, type DbExecutor } from '@erp/db';
 import type { DocFlowEdge, DocFlowService as IDocFlowService } from '@erp/kernel';
 import { DB } from '../../../database/database.module.js';
 
@@ -25,8 +25,9 @@ function toEdge(row: DocFlowRow): DocFlowEdge {
 export class DocFlowService implements IDocFlowService {
   constructor(@Inject(DB) private readonly db: Database) {}
 
-  async link(edge: DocFlowEdge): Promise<void> {
-    await this.db.insert(schema.docFlow).values({
+  /** Record an edge; pass the caller's transaction as `db` to commit atomically with it. */
+  async link(edge: DocFlowEdge, db: DbExecutor = this.db): Promise<void> {
+    await db.insert(schema.docFlow).values({
       sourceType: edge.sourceType,
       sourceId: edge.sourceId,
       targetType: edge.targetType,

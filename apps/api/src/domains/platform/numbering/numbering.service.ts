@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
-import { schema, type Database } from '@erp/db';
+import { schema, type Database, type DbExecutor } from '@erp/db';
 import { DB } from '../../../database/database.module.js';
 import { formatDocNo } from './number-format.js';
 
@@ -41,9 +41,12 @@ export class NumberingService {
       .onConflictDoNothing({ target: [schema.numberRange.object, schema.numberRange.scope] });
   }
 
-  /** Allocate the next number for (object, scope). Throws if the range is undefined or exhausted. */
-  async next(object: string, scope = 'GLOBAL'): Promise<string> {
-    const [row] = await this.db
+  /**
+   * Allocate the next number for (object, scope). Throws if the range is undefined or exhausted.
+   * Pass the caller's transaction as `db` so a rolled-back posting never burns a gap-free number.
+   */
+  async next(object: string, scope = 'GLOBAL', db: DbExecutor = this.db): Promise<string> {
+    const [row] = await db
       .update(schema.numberRange)
       .set({
         currentValue: sql`${schema.numberRange.currentValue} + 1`,

@@ -15,6 +15,13 @@ export interface PostingLine {
   drCr: DrCr;
   /** Non-negative money for this line. */
   money: Money;
+  /** Subledger partner — REQUIRED when `glAccount` is a reconciliation account (AR/AP). */
+  partnerId?: string;
+  /** CO object; the posting service allows it on P&L (revenue/expense) lines only. */
+  costCenterId?: string;
+  /** Tax code that produced a VAT line; the computed amount is frozen on the line. */
+  taxCode?: string;
+  lineText?: string;
 }
 
 export interface CurrencyTotals {
