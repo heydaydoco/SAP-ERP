@@ -10,16 +10,25 @@ import type { PostingLine } from './balance';
  *  - exactly-once via idempotency key (§5.2),
  *  - GL accounts resolved through account-determination config, never hard-coded (§4.5).
  *
- * Interface stub; concrete service + journal_entry/journal_line tables land in Phase 2 (FI),
- * with the contract reserved here in Phase 0.
+ * Contract reserved in Phase 0; Phase 2 (FI) implements it concretely in
+ * `apps/api/src/domains/finance-accounting` (journal_entry/journal_line). This is the SINGLE input
+ * shape every caller uses — manual entries, AR/AP documents, and later domains alike.
  */
 
 export interface JournalEntryInput {
-  /** Idempotency key — same key never posts twice. */
+  /** Idempotency key — same key never posts twice within its company code (§5.2). */
   postingKey: string;
+  /** The posting org — drives the period lock, functional currency, and chart of accounts. */
+  companyCodeId: string;
   postingDate: string; // ISO date; must fall in an open fiscal period (§5.1 period locking)
+  /** Business-event date (SAP BLDAT); defaults to `postingDate` when omitted. */
+  documentDate?: string;
+  /** Document type (SAP BLART), e.g. 'SA' manual GL / 'AB' reversal; defaults to 'SA'. */
+  docType?: string;
+  /** Document (transaction) currency — every line's money must be in it. */
   currency: CurrencyCode;
-  reference: string; // source doc reference, e.g. 'sales.billing:BIL-2026-0001'
+  reference: string; // source doc reference, e.g. 'manual' or 'sales.billing:BIL-2026-0001'
+  headerText?: string;
   lines: PostingLine[];
 }
 

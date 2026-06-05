@@ -94,6 +94,20 @@ export class GlAccountService {
     return row;
   }
 
+  /** Look up by the (chart, account number) natural key — the shape journal lines carry. */
+  async getByNumber(chartOfAccounts: string, accountNumber: string) {
+    const [row] = await this.db
+      .select()
+      .from(schema.glAccount)
+      .where(this.key(chartOfAccounts, accountNumber));
+    if (!row) {
+      throw new NotFoundException(
+        `gl account ${accountNumber} not found in chart ${chartOfAccounts}`,
+      );
+    }
+    return row;
+  }
+
   private key(chartOfAccounts: string, accountNumber: string) {
     return and(
       eq(schema.glAccount.chartOfAccounts, chartOfAccounts),

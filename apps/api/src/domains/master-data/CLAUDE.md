@@ -33,8 +33,9 @@ sales/purchasing/mrp extensions, BP carrier/bank roles, uom · bom · profit-cen
   `fx_rate` per (from, to, rate_type, valid_from).
 - **`create*` throws on duplicate (API); idempotent `ensure*` returns the id (seed)** — same split as
   org-structure, keeping the seed re-runnable.
-- **GL normal balance** comes from `normalBalance()` in `@erp/shared` (asset/expense = D; rest = C);
-  fi-posting (Phase 2) uses it to validate journal-line debit/credit indicators.
+- **GL normal balance** comes from `normalBalance()` in `@erp/shared` (asset/expense = D; rest = C).
+  It is a presentation/reporting concept (trial-balance signs) — NOT a posting gate; fi-posting
+  accepts both sides on any account (crediting an asset is how it decreases).
 - **Tax + FX are unit-tested calc paths (§5.4).** Tax rounds through `Money.percentage`; FX
   resolution is the pure `resolveFxRate(candidates, onDate)` helper (latest valid_from ≤ date).
 - **BP roles are 1:1 extension tables, not a type.** A partner gets a `customer` and/or `vendor` row

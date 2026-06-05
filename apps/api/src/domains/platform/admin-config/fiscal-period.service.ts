@@ -112,6 +112,18 @@ export class FiscalPeriodService {
 
   /** Throws if no period covers `date`, or the covering period/year is CLOSED (§5.1 period lock). */
   async assertPeriodOpen(companyCodeId: string, date: string): Promise<void> {
+    await this.resolveOpenPeriod(companyCodeId, date);
+  }
+
+  /**
+   * Resolve the OPEN period covering `date` and return what fi-posting stamps on the journal
+   * header (§5.1): the period id plus the denormalized fiscal year / period number. Same
+   * NotFound/Conflict contract as `assertPeriodOpen`.
+   */
+  async resolveOpenPeriod(
+    companyCodeId: string,
+    date: string,
+  ): Promise<{ fiscalPeriodId: string; fiscalYear: number; periodNo: number }> {
     const row = await this.findCoveringPeriod(companyCodeId, date);
     if (!row) {
       throw new NotFoundException(
@@ -121,13 +133,16 @@ export class FiscalPeriodService {
     if (row.yearStatus !== 'OPEN' || row.periodStatus !== 'OPEN') {
       throw new ConflictException(`fiscal period covering ${date} is closed`);
     }
+    return { fiscalPeriodId: row.periodId, fiscalYear: row.year, periodNo: row.periodNo };
   }
 
   private async findCoveringPeriod(companyCodeId: string, date: string) {
     const [row] = await this.db
       .select({
         periodId: schema.fiscalPeriod.id,
+        periodNo: schema.fiscalPeriod.periodNo,
         periodStatus: schema.fiscalPeriod.status,
+        year: schema.fiscalYear.year,
         yearStatus: schema.fiscalYear.status,
       })
       .from(schema.fiscalPeriod)

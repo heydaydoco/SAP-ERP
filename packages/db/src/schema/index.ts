@@ -3,3 +3,4 @@
 export * from './_shared/index';
 export * from './platform/index';
 export * from './master-data/index';
+export * from './finance-accounting/index';
