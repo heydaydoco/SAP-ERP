@@ -7,15 +7,20 @@
 
 ## Modules
 - `general-ledger` ✅ — journal_entry/journal_line + the concrete fi-posting service
-- `accounts-receivable` · `accounts-payable` — next slice (PR-B): AR/AP documents posting through
-  the same `JournalService.post()` with recon-account substitution + tax lines
+- `accounts-receivable` ✅ · `accounts-payable` ✅ — AR (`DR`) / AP (`KR`) invoices post through the
+  same `JournalService.post()` with recon-account substitution + VAT lines (`invoice-posting/`
+  holds the shared, unit-tested tax-line builder). **No `ar_invoice`/`ap_invoice` tables (D4)** —
+  the journal IS the document; open items are the recon lines filtered by partner.
 - `fixed-assets` · `tax` · `bank-reconciliation` · `period-close` · `financial-statements` — later
 
 ## Status
-🟧 **In progress (Phase 2, slice 1 shipped).** `general-ledger`: manual journal posting end-to-end —
-balanced posting, period lock, idempotency, reversal, trial balance (migration 0008). Deferred:
-FX/cross-currency translation (needs a kernel `Money.convert`; columns already stored per line),
-AR/AP documents, draft/parking, `journal_line` partitioning, the outbox relay worker.
+🟧 **In progress (Phase 2, slices 1–2 shipped).** `general-ledger`: manual journal posting
+end-to-end — balanced posting, period lock, idempotency, reversal, trial balance (migration 0008).
+`accounts-receivable`/`accounts-payable` (PR-B): customer/vendor invoice posting with VAT + open-item
+reads (no migration — journal-only). Deferred: FX/cross-currency translation (needs a kernel
+`Money.convert`; columns already stored per line), payment/clearing (open items are all-open until
+then), draft/parking, `journal_line` partitioning, the outbox relay worker, the per-counterparty VAT
+truncation (절사) flag (builder supports it; no master column yet).
 
 > **Note:** The backbone. Owns journal_entry/journal_line. Enforce immutability + reversal-only +
 > period locking (§5.1). Hosts the concrete fi-posting service from the kernel.
@@ -45,8 +50,18 @@ AR/AP documents, draft/parking, `journal_line` partitioning, the outbox relay wo
 - **`normalBalance` is NOT a posting gate** — crediting an asset is how it decreases. It is used on
   the reporting side only.
 - **Sign convention:** amounts are non-negative magnitudes; the sign lives in `dr_cr` (SAP SHKZG).
-- **Document numbers:** `finance.journal_entry` number ranges are per-fiscal-year scope
-  (`JE-<year>-NNNNNN`); a new year needs its range seeded/defined before posting.
+- **Document numbers:** number ranges are per-fiscal-year scope; a new year needs its range
+  seeded/defined before posting. Each posted doc type owns its range (SAP-style): manual `SA` + `AB`
+  reversals → `finance.journal_entry` (`JE-<year>-NNNNNN`); AR `DR` → `finance.ar_invoice`
+  (`DR-<year>-`); AP `KR` → `finance.ap_invoice` (`KR-<year>-`). `post()` selects by `docType`;
+  `reverse()` stays on the JE range, so an AB reversing a DR/KR still gets a `JE-` number.
+- **AR/AP invoices (PR-B):** the customer/vendor is sent as a BP **UUID**; the recon account is
+  **substituted** from its `customer.ar_recon_account` / `vendor.ap_recon_account` role (never sent),
+  and the revenue/expense account comes from the **DTO** (not VKOA account-determination). Net
+  (exclusive) input; VAT is built **per line then aggregated per tax code** (D1 — equals the itemised
+  세금계산서 합계세액, not a doc-total round), half-away rounded (D2). A tax code with a NULL
+  `gl_account`, or of the wrong `kind` for the side (OUTPUT for AR / INPUT for AP), is rejected. The
+  due date is **derived** (document_date + `payment_terms_days`), never stored.
 - Document vs functional currency are BOTH stored per line from day one; this slice requires
   document == functional (KRW). The FX slice adds translation + the functional tie-out/rounding
   line additively — no schema rework.
@@ -63,7 +78,10 @@ AR/AP documents, draft/parking, `journal_line` partitioning, the outbox relay wo
 ## FI postings
 - `POST /finance-accounting/journal-entries` → manual `SA` document (Dr/Cr free within the rules).
 - `reverse()` → `AB` document mirroring the original.
-- PR-B adds AR (`DR`: Dr recon AR / Cr revenue + output VAT) and AP (`KR`) document posting.
+- `POST /finance-accounting/ar-invoices` → `DR`: Dr AR recon (gross, +partner) / Cr revenue (per
+  line) / Cr output VAT (Σ per tax code). `GET .../ar-invoices/open-items?companyCodeId&partnerId`.
+- `POST /finance-accounting/ap-invoices` → `KR`: Dr expense (per line) / Dr input VAT / Cr AP recon
+  (gross, +partner). `GET .../ap-invoices/open-items?companyCodeId&partnerId`.
 
 ## Domain events
 - `finance.journal.posted` / `finance.journal.reversed` — outbox rows written in the SAME
@@ -71,5 +89,6 @@ AR/AP documents, draft/parking, `journal_line` partitioning, the outbox relay wo
   No in-process publish from inside the posting transaction.
 
 ## Permissions
-`finance:journal:post` · `finance:journal:reverse` · `finance:journal:read`
-(ADMIN `*` covers them.)
+`finance:journal:post` · `finance:journal:reverse` · `finance:journal:read` ·
+`finance:ar_invoice:{post,read}` · `finance:ap_invoice:{post,read}`
+(ADMIN `*` covers them; no seed rows / migration — declared on the controllers.)

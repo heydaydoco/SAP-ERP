@@ -67,6 +67,19 @@ async function seed(): Promise<void> {
       prefix: 'JE-2026-',
       padding: 6,
     });
+    // AR/AP invoices own their document number ranges (SAP-style per-doc-type), scoped per year.
+    await numbering.defineRange({
+      object: 'finance.ar_invoice',
+      scope: '2026',
+      prefix: 'DR-2026-',
+      padding: 6,
+    });
+    await numbering.defineRange({
+      object: 'finance.ap_invoice',
+      scope: '2026',
+      prefix: 'KR-2026-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -137,6 +150,8 @@ async function seed(): Promise<void> {
         accountType: 'ASSET' as const,
         isReconciliation: true,
       },
+      // 부가세대급금 (input VAT receivable) — the AP invoice debits this; tax code A10 posts to it.
+      { accountNumber: '1350', name: '부가세대급금', accountType: 'ASSET' as const },
       {
         accountNumber: '2100',
         name: '외상매입금',
@@ -145,6 +160,8 @@ async function seed(): Promise<void> {
       },
       { accountNumber: '2550', name: '부가세예수금', accountType: 'LIABILITY' as const },
       { accountNumber: '4000', name: '제품매출', accountType: 'REVENUE' as const },
+      // 상품매입 — the AP (vendor) invoice debits this expense; AR credits revenue 4000.
+      { accountNumber: '5000', name: '상품매입', accountType: 'EXPENSE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',
@@ -160,7 +177,13 @@ async function seed(): Promise<void> {
         ratePercent: '10',
         glAccount: '2550',
       },
-      { code: 'A10', name: '매입 부가세 10%', kind: 'INPUT' as const, ratePercent: '10' },
+      {
+        code: 'A10',
+        name: '매입 부가세 10%',
+        kind: 'INPUT' as const,
+        ratePercent: '10',
+        glAccount: '1350',
+      },
     ]) {
       await taxCodes.ensureTaxCode(tax);
     }
@@ -225,7 +248,7 @@ async function seed(): Promise<void> {
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
         `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination + ` +
-        `master data (5 currencies / 2 fx rates / 5 GL accounts / 2 tax codes / cost center 1000 / ` +
+        `master data (5 currencies / 2 fx rates / 7 GL accounts / 2 tax codes / cost center 1000 / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000)`,
     );
   } finally {
