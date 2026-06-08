@@ -27,12 +27,28 @@ import { JOURNAL_EVENT_NAMESPACE, uuidV5 } from './posting-id.js';
 import { trialBalance, type TrialBalanceRow } from './trial-balance.js';
 import type { CreateManualJournalDto, JournalQuery } from './journal.dto.js';
 
-/** Document types (SAP BLART essence): manual GL entry / reversal. AR/AP types arrive in PR-B. */
+/** Document types (SAP BLART essence): manual GL entry / reversal / AR (customer) / AP (vendor). */
 export const DOC_TYPE_MANUAL = 'SA';
 export const DOC_TYPE_REVERSAL = 'AB';
+/** Customer (AR) invoice ≈ SAP FB70; vendor (AP) invoice ≈ FB60 — both post through `post()`. */
+export const DOC_TYPE_AR_INVOICE = 'DR';
+export const DOC_TYPE_AP_INVOICE = 'KR';
 
-/** Number-range object — per-fiscal-year scope, seeded as e.g. (object, '2026', 'JE-2026-'). */
+/** Number-range objects — per-fiscal-year scope, seeded as e.g. (object, '2026', 'JE-2026-'). */
 const NUMBER_OBJECT = 'finance.journal_entry';
+const NUMBER_OBJECT_AR_INVOICE = 'finance.ar_invoice';
+const NUMBER_OBJECT_AP_INVOICE = 'finance.ap_invoice';
+
+/**
+ * Pick the document number range for a doc type. AR/AP invoices draw from their own DR-/KR- ranges
+ * (a posted document type owns its number range, SAP-style); everything else — manual SA and the AB
+ * reversals (`reverse()` is intentionally left on the JE range) — uses the general journal range.
+ */
+function numberObjectFor(docType: string): string {
+  if (docType === DOC_TYPE_AR_INVOICE) return NUMBER_OBJECT_AR_INVOICE;
+  if (docType === DOC_TYPE_AP_INVOICE) return NUMBER_OBJECT_AP_INVOICE;
+  return NUMBER_OBJECT;
+}
 /** doc_flow node type for journal documents. */
 const DOC_FLOW_TYPE = 'finance.journal_entry';
 
@@ -126,8 +142,12 @@ export class JournalService implements FiPostingService {
     let journalId: string;
     try {
       journalId = await this.db.transaction(async (tx) => {
-        // Inside the tx so a rollback never burns a gap-free number.
-        const no = await this.numbering.next(NUMBER_OBJECT, String(period.fiscalYear), tx);
+        // Inside the tx so a rollback never burns a gap-free number. AR/AP docs use their own range.
+        const no = await this.numbering.next(
+          numberObjectFor(docType),
+          String(period.fiscalYear),
+          tx,
+        );
         const [header] = await tx
           .insert(schema.journalEntry)
           .values({
@@ -179,6 +199,7 @@ export class JournalService implements FiPostingService {
             eventId: this.eventId(input.companyCodeId, input.postingKey),
             payload: {
               journalId: header.id,
+              docType,
               docNo: no,
               postingKey: input.postingKey,
               companyCodeId: input.companyCodeId,

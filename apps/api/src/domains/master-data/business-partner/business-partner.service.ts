@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { asc, eq, sql } from 'drizzle-orm';
 import { schema, type Database } from '@erp/db';
 import { DB } from '../../../database/database.module.js';
@@ -87,7 +93,7 @@ export class BusinessPartnerService {
 
   async addCustomerRole(bpId: string, dto: CreateCustomerRoleDto, actor = 'system') {
     await this.assertBpExists(bpId);
-    await this.assertGlAccountExists(dto.arReconAccount);
+    await this.assertReconAccount(dto.arReconAccount);
     const existing = await this.db
       .select({ id: schema.customer.id })
       .from(schema.customer)
@@ -107,7 +113,7 @@ export class BusinessPartnerService {
     dto: CreateCustomerRoleDto,
     actor = 'system',
   ): Promise<void> {
-    await this.assertGlAccountExists(dto.arReconAccount);
+    await this.assertReconAccount(dto.arReconAccount);
     await this.db
       .insert(schema.customer)
       .values({ ...this.customerValues(bpId, dto), createdBy: actor, updatedBy: actor })
@@ -118,7 +124,7 @@ export class BusinessPartnerService {
 
   async addVendorRole(bpId: string, dto: CreateVendorRoleDto, actor = 'system') {
     await this.assertBpExists(bpId);
-    await this.assertGlAccountExists(dto.apReconAccount);
+    await this.assertReconAccount(dto.apReconAccount);
     const existing = await this.db
       .select({ id: schema.vendor.id })
       .from(schema.vendor)
@@ -134,7 +140,7 @@ export class BusinessPartnerService {
   }
 
   async ensureVendorRole(bpId: string, dto: CreateVendorRoleDto, actor = 'system'): Promise<void> {
-    await this.assertGlAccountExists(dto.apReconAccount);
+    await this.assertReconAccount(dto.apReconAccount);
     await this.db
       .insert(schema.vendor)
       .values({ ...this.vendorValues(bpId, dto), createdBy: actor, updatedBy: actor })
@@ -183,12 +189,22 @@ export class BusinessPartnerService {
     if (!row) throw new NotFoundException(`business partner ${bpId} not found`);
   }
 
-  /** A reconciliation account must exist in the GL master (any chart) before a role can use it. */
-  private async assertGlAccountExists(accountNumber: string): Promise<void> {
+  /**
+   * A role's reconciliation account must exist in the GL master AND be flagged
+   * `is_reconciliation = true`. AR/AP postings hit it as a recon (subledger) line, and the open-item
+   * subledger IS those recon lines (no second store) — a non-recon account here would post a line
+   * that never surfaces in the subledger, so it is rejected at role assignment, not silently later.
+   */
+  private async assertReconAccount(accountNumber: string): Promise<void> {
     const [row] = await this.db
-      .select({ id: schema.glAccount.id })
+      .select({ isReconciliation: schema.glAccount.isReconciliation })
       .from(schema.glAccount)
       .where(eq(schema.glAccount.accountNumber, accountNumber));
     if (!row) throw new NotFoundException(`gl account ${accountNumber} not found`);
+    if (!row.isReconciliation) {
+      throw new BadRequestException(
+        `gl account ${accountNumber} is not a reconciliation account; AR/AP roles must use one`,
+      );
+    }
   }
 }

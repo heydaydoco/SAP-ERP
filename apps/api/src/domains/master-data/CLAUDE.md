@@ -39,8 +39,10 @@ sales/purchasing/mrp extensions, BP carrier/bank roles, uom · bom · profit-cen
 - **Tax + FX are unit-tested calc paths (§5.4).** Tax rounds through `Money.percentage`; FX
   resolution is the pure `resolveFxRate(candidates, onDate)` helper (latest valid_from ≤ date).
 - **BP roles are 1:1 extension tables, not a type.** A partner gets a `customer` and/or `vendor` row
-  (one each, `bp_id` unique). A role's reconciliation account must exist in `gl_account` before it can
-  be attached. Bank details stay out of `vendor` (bank-master later) to avoid duplicating PIPA data (§5.3).
+  (one each, `bp_id` unique). A role's reconciliation account must exist in `gl_account` **and be
+  flagged `is_reconciliation = true`** before it can be attached (a non-recon account would post AR/AP
+  lines that never surface in the subledger). Bank details stay out of `vendor` (bank-master later) to
+  avoid duplicating PIPA data (§5.3).
 
 ## Key tables
 - `currency` (code, minor_unit, symbol) · `fx_rate` (from/to/rate_type/valid_from → rate numeric(18,6))
