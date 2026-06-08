@@ -10,6 +10,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { schema, type Database } from '@erp/db';
 import {
   assertBalanced,
+  assertFunctionalBalanced,
   Money,
   type FiPostingService,
   type JournalEntryInput,
@@ -17,10 +18,12 @@ import {
   type PostingLine,
 } from '@erp/kernel';
 import { DB } from '../../../database/database.module.js';
+import { AccountDeterminationService } from '../../platform/admin-config/account-determination.service.js';
 import { FiscalPeriodService } from '../../platform/admin-config/fiscal-period.service.js';
 import { DocFlowService } from '../../platform/doc-flow/doc-flow.service.js';
 import { NumberingService } from '../../platform/numbering/numbering.service.js';
 import { OutboxService } from '../../platform/outbox/outbox.service.js';
+import { CurrencyService } from '../../master-data/currency/currency.service.js';
 import { DbCurrencyRegistry } from '../../master-data/currency/db-currency-registry.js';
 import { GlAccountService } from '../../master-data/gl-account/gl-account.service.js';
 import { JOURNAL_EVENT_NAMESPACE, uuidV5 } from './posting-id.js';
@@ -52,6 +55,13 @@ function numberObjectFor(docType: string): string {
 /** doc_flow node type for journal documents. */
 const DOC_FLOW_TYPE = 'finance.journal_entry';
 
+/**
+ * account_determination transaction key for the FX per-line rounding plug (SAP KDR — a technical
+ * rounding difference, NOT economic FX gain/loss). Its GL account MUST be `currency = null` so the
+ * 0-amount line in the foreign document currency is not rejected against a currency-pinned account.
+ */
+const FX_ROUNDING_KEY = 'FX_ROUNDING';
+
 /** True iff `e` is the Postgres unique violation for the named constraint. */
 function isUniqueViolation(e: unknown, constraint: string): boolean {
   if (typeof e !== 'object' || e === null) return false;
@@ -63,6 +73,12 @@ interface ResolvedLine extends PostingLine {
   isReconAccount: boolean;
 }
 
+/** A resolved line paired with its functional-currency amount (the FX translation of `money`). */
+interface TranslatedLine {
+  line: ResolvedLine;
+  functionalMoney: Money;
+}
+
 /**
  * Concrete fi-posting service (root CLAUDE.md §3.2) — the kernel stub made real. The SINGLE writer
  * of journal_entry/journal_line: every value-moving transaction calls `post()`; corrections go
@@ -70,10 +86,11 @@ interface ResolvedLine extends PostingLine {
  * here is authoritative, row-local CHECKs and the 0008 deferred balance trigger + immutability
  * fences back it at the DB against any other writer.
  *
- * This slice posts single-currency entries (document == functional currency, both stored per line
- * from day one). FX translation — and the functional-currency tie-out with its rounding line — is
- * layered on additively in the FX slice; `reverse()` already copies functional amounts verbatim so
- * reversals stay exact when rates arrive.
+ * Cross-currency aware: when the document currency differs from the company's functional currency,
+ * `post()` translates each line on the DOCUMENT date, injects an FX_ROUNDING line for the functional
+ * tie-out, and stamps the rate on the header (see `translateLines`). A functional-currency entry is
+ * byte-identical to the pre-FX path (rate NULL, functional_amount == amount). `reverse()` copies
+ * functional amounts verbatim, so a reversal stays exact in both currencies without re-translating.
  */
 @Injectable()
 export class JournalService implements FiPostingService {
@@ -85,6 +102,8 @@ export class JournalService implements FiPostingService {
     private readonly docFlow: DocFlowService,
     private readonly glAccounts: GlAccountService,
     private readonly registry: DbCurrencyRegistry,
+    private readonly currencies: CurrencyService,
+    private readonly accountDetermination: AccountDeterminationService,
   ) {}
 
   // ── kernel contract ─────────────────────────────────────────────────────────
@@ -100,11 +119,13 @@ export class JournalService implements FiPostingService {
 
     const company = await this.getCompany(input.companyCodeId);
 
-    // This slice raises every entry in the company's functional currency; FX is layered on later.
-    if (input.currency !== company.currency) {
+    // FX: the document currency may differ from the company's functional currency. The rate override
+    // is FX-only — rejecting it on a functional-currency entry keeps the KRW==KRW path unambiguous.
+    const isFx = input.currency !== company.currency;
+    if (input.fxRate !== undefined && !isFx) {
       throw new BadRequestException(
-        `cross-currency posting is not supported yet: document currency ${input.currency} != ` +
-          `functional currency ${company.currency}`,
+        `fx rate override is only valid on a foreign-currency document; ${input.currency} is the ` +
+          `functional currency`,
       );
     }
     for (const line of input.lines) {
@@ -122,7 +143,7 @@ export class JournalService implements FiPostingService {
       throw new BadRequestException('a journal entry must move value — all lines are zero');
     }
 
-    // Authoritative balance rule (kernel): ≥2 lines, debits == credits per currency.
+    // Authoritative balance rule (kernel): ≥2 lines, debits == credits per DOCUMENT currency.
     try {
       assertBalanced(input.lines);
     } catch (e) {
@@ -132,10 +153,24 @@ export class JournalService implements FiPostingService {
     // Period lock (§5.1) + the year/period stamp for the header.
     const period = await this.fiscal.resolveOpenPeriod(input.companyCodeId, input.postingDate);
 
-    const lines = await this.resolveLines(
+    const resolved = await this.resolveLines(
       input.lines,
       company.chartOfAccounts,
       input.companyCodeId,
+    );
+
+    // Translate each line into the functional currency, plugging an FX entry's per-line rounding
+    // residue with one FX_ROUNDING line so it ties out in the functional currency too. Translation
+    // is keyed on the DOCUMENT date (SAP WWERT/BLDAT); KRW==KRW stays byte-identical (rate NULL,
+    // functional_amount == amount). `lines` now carries each line's functional amount.
+    const documentDate = input.documentDate ?? input.postingDate;
+    const { fxRate, lines } = await this.translateLines(
+      resolved,
+      input.currency,
+      company,
+      isFx,
+      input.fxRate,
+      documentDate,
     );
 
     const docType = input.docType ?? DOC_TYPE_MANUAL;
@@ -163,6 +198,8 @@ export class JournalService implements FiPostingService {
             fiscalPeriodId: period.fiscalPeriodId,
             currency: input.currency,
             functionalCurrency: company.currency,
+            // Doc→functional rate snapshot; NULL for a functional-currency (KRW==KRW) entry.
+            fxRate,
             reference: input.reference,
             headerText: input.headerText ?? null,
             createdBy: actor,
@@ -172,15 +209,15 @@ export class JournalService implements FiPostingService {
         if (!header) throw new Error('journal_entry insert returned no row');
 
         await tx.insert(schema.journalLine).values(
-          lines.map((line, i) => ({
+          lines.map(({ line, functionalMoney }, i) => ({
             journalEntryId: header.id,
             lineNo: i + 1,
             glAccount: line.glAccount,
             drCr: line.drCr,
             amount: line.money.toNumeric(),
             currency: line.money.currency,
-            // Document == functional in this slice; the FX slice computes a real translation.
-            functionalAmount: line.money.toNumeric(),
+            // The line translated into the functional currency (== amount when doc == functional).
+            functionalAmount: functionalMoney.toNumeric(),
             functionalCurrency: company.currency,
             isReconAccount: line.isReconAccount,
             partnerId: line.partnerId ?? null,
@@ -410,6 +447,8 @@ export class JournalService implements FiPostingService {
         documentDate: dto.documentDate,
         docType: DOC_TYPE_MANUAL,
         currency: dto.currency,
+        // Optional manual FX-rate override; post() rejects it on a functional-currency entry.
+        fxRate: dto.fxRate,
         reference: dto.reference,
         headerText: dto.headerText,
         lines,
@@ -548,6 +587,99 @@ export class JournalService implements FiPostingService {
       resolved.push({ ...line, isReconAccount: account.isReconciliation });
     }
     return resolved;
+  }
+
+  /**
+   * Compute each line's functional-currency amount. A functional-currency entry is the identity
+   * (functional == document, rate NULL) so the KRW==KRW path stays byte-identical to the pre-FX
+   * slice. An FX entry resolves the document→functional rate (explicit override, else the 'M' master
+   * rate on the document date — NEVER a reciprocal of a stored rate), translates each line half-away
+   * to the functional minor unit, and injects ONE FX_ROUNDING line carrying the residue so
+   * Σdebit == Σcredit in the functional currency. `assertFunctionalBalanced` proves the tie-out
+   * before the write; the 0009 DB trigger re-checks it at COMMIT (and on every reversal).
+   */
+  private async translateLines(
+    resolved: ResolvedLine[],
+    documentCurrency: string,
+    company: { id: string; code: string; currency: string; chartOfAccounts: string },
+    isFx: boolean,
+    override: string | undefined,
+    documentDate: string,
+  ): Promise<{ fxRate: string | null; lines: TranslatedLine[] }> {
+    if (!isFx) {
+      return {
+        fxRate: null,
+        lines: resolved.map((line) => ({ line, functionalMoney: line.money })),
+      };
+    }
+
+    const functionalCurrency = company.currency;
+    const rate =
+      override ?? (await this.resolveDocRate(documentCurrency, functionalCurrency, documentDate));
+
+    let translated: TranslatedLine[];
+    try {
+      translated = resolved.map((line) => ({
+        line,
+        functionalMoney: line.money.convert(rate, functionalCurrency, this.registry),
+      }));
+    } catch (e) {
+      // A malformed/over-precise override rate surfaces here as a client error.
+      throw new BadRequestException((e as Error).message);
+    }
+
+    // Per-line rounding leaves a functional residue: Σ functional debit − Σ functional credit.
+    const sideMinor = (drCr: 'D' | 'C'): bigint =>
+      translated
+        .filter((t) => t.line.drCr === drCr)
+        .reduce((sum, t) => sum + t.functionalMoney.minorUnits, 0n);
+    const residue = sideMinor('D') - sideMinor('C');
+    if (residue !== 0n) {
+      // KDR rounding plug: 0 in the document currency, the residue in the functional currency, on the
+      // short side. account_determination supplies the GL account (must be currency=null, see above).
+      const roundingAccount = await this.accountDetermination.resolve({
+        transactionKey: FX_ROUNDING_KEY,
+        chartOfAccounts: company.chartOfAccounts,
+        companyCode: company.code,
+      });
+      const [roundLine] = await this.resolveLines(
+        [
+          {
+            glAccount: roundingAccount,
+            drCr: residue > 0n ? 'C' : 'D',
+            money: Money.zero(documentCurrency, this.registry),
+          },
+        ],
+        company.chartOfAccounts,
+        company.id,
+      );
+      if (!roundLine) throw new Error('fx rounding line failed to resolve');
+      translated.push({
+        line: roundLine,
+        functionalMoney: Money.fromMinorUnits(
+          residue > 0n ? residue : -residue,
+          functionalCurrency,
+          this.registry,
+        ),
+      });
+    }
+
+    // Tie-out in the functional currency (service assert; the 0009 trigger is the DB backstop).
+    try {
+      assertFunctionalBalanced(
+        translated.map((t) => ({ drCr: t.line.drCr, functionalAmount: t.functionalMoney })),
+      );
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+
+    return { fxRate: rate, lines: translated };
+  }
+
+  /** Resolve the document→functional 'M' rate effective on the document date (never reciprocated). */
+  private async resolveDocRate(from: string, to: string, onDate: string): Promise<string> {
+    const resolved = await this.currencies.resolveRate(from, to, onDate, 'M');
+    return resolved.rate;
   }
 
   /** Outbox event id: deterministic per (company, posting key) so retries dedupe, tenants don't. */

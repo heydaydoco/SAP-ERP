@@ -14,13 +14,17 @@
 - `fixed-assets` · `tax` · `bank-reconciliation` · `period-close` · `financial-statements` — later
 
 ## Status
-🟧 **In progress (Phase 2, slices 1–2 shipped).** `general-ledger`: manual journal posting
+🟧 **In progress (Phase 2, slices 1–3 shipped).** `general-ledger`: manual journal posting
 end-to-end — balanced posting, period lock, idempotency, reversal, trial balance (migration 0008).
 `accounts-receivable`/`accounts-payable` (PR-B): customer/vendor invoice posting with VAT + open-item
-reads (no migration — journal-only). Deferred: FX/cross-currency translation (needs a kernel
-`Money.convert`; columns already stored per line), payment/clearing (open items are all-open until
-then), draft/parking, `journal_line` partitioning, the outbox relay worker, the per-counterparty VAT
-truncation (절사) flag (builder supports it; no master column yet).
+reads (no migration — journal-only). **FX slice:** cross-currency translation through the same
+`post()` — kernel `Money.convert`, per-line translation on the document date, an FX_ROUNDING plug for
+the functional tie-out, optional manual-GL rate override, and the migration-**0009** functional-balance
+backstop trigger. Deferred: **realized** FX gain/loss (needs clearing/payment-run) and **unrealized**
+period-end revaluation (needs period-close + auto-reversal) — both absent until those runs land;
+payment/clearing (open items all-open until then), draft/parking, `journal_line` partitioning, the
+outbox relay worker, the per-counterparty VAT truncation (절사) flag (builder supports it; no master
+column yet); full Korean 세금계산서 공급가액 KRW statutory conversion (per-line translation approximates it).
 
 > **Note:** The backbone. Owns journal_entry/journal_line. Enforce immutability + reversal-only +
 > period locking (§5.1). Hosts the concrete fi-posting service from the kernel.
@@ -30,11 +34,12 @@ truncation (절사) flag (builder supports it; no master column yet).
   `FiPostingService`. Sibling domains import `FinanceAccountingModule` and call `post()` — never
   insert journal rows directly.
 - **Balance is enforced in layers:** kernel `assertBalanced` (authoritative, per document currency)
-  in the service → row-local CHECKs → 0008 deferred constraint trigger re-checking at COMMIT that
-  Σdebit=Σcredit per (journal, currency), ≥2 lines, and every line is in the header's document
-  currency → immutability fence triggers (only the POSTED→REVERSED back-pointer flip may UPDATE a
-  header; lines are write-once AND append-proof — they insert only in the tx that created their
-  header).
+  + `assertFunctionalBalanced` (per functional currency, FX entries) in the service → row-local
+  CHECKs → 0008 deferred constraint trigger re-checking at COMMIT that Σdebit=Σcredit per (journal,
+  document currency), ≥2 lines, and every line is in the header's document currency → **0009** deferred
+  trigger re-checking Σdebit=Σcredit per (journal, **functional** currency) → immutability fence
+  triggers (only the POSTED→REVERSED back-pointer flip may UPDATE a header; lines are write-once AND
+  append-proof — they insert only in the tx that created their header).
 - **Idempotency (§5.2):** `posting_key` is NOT NULL, UNIQUE **per company code** (so one tenant
   cannot probe or hijack another's keys); a replayed `post()` returns the live state of the
   existing entry. Outbox event ids are UUIDv5 of `companyCodeId:postingKey` (`posting-id.ts`), so
@@ -62,9 +67,23 @@ truncation (절사) flag (builder supports it; no master column yet).
   세금계산서 합계세액, not a doc-total round), half-away rounded (D2). A tax code with a NULL
   `gl_account`, or of the wrong `kind` for the side (OUTPUT for AR / INPUT for AP), is rejected. The
   due date is **derived** (document_date + `payment_terms_days`), never stored.
-- Document vs functional currency are BOTH stored per line from day one; this slice requires
-  document == functional (KRW). The FX slice adds translation + the functional tie-out/rounding
-  line additively — no schema rework.
+- **FX / cross-currency (FX slice):** when the document currency ≠ the company's functional currency,
+  `post()` translates each line into the functional currency with the kernel `Money.convert`
+  (half-away, scale-6 rate), keyed on the **document date** (SAP WWERT/BLDAT — same rate that states
+  AR/revenue; never the posting date). The rate is the `fx_rate` master 'M' rate on that date, or an
+  optional **manual-GL** `fxRate` override (`JournalEntryInput.fxRate`; AR/AP never override). An
+  override on a functional-currency entry is rejected. Per-line rounding leaves a few-minor-unit
+  functional residue: `post()` injects ONE **FX_ROUNDING** line — `amount` 0 in the document currency,
+  the residue in the functional currency, on the short side — whose GL comes from
+  `account_determination` (`transactionKey: 'FX_ROUNDING'`); that account **must be `currency = null`**
+  (else the 0-amount foreign line is rejected against a currency-pinned account). It is a technical
+  rounding plug (SAP KDR), NOT economic FX gain/loss. Rates are **never reciprocated** — a KRW→foreign
+  document needs its own directional `fx_rate` row. The header stamps `fx_rate` (NULL when doc ==
+  functional). `reverse()` is unchanged: it copies `functional_amount` (and the rounding line)
+  verbatim with Dr/Cr swapped, so original + reversal net to zero in both currencies; 0009 guarantees
+  every posted FX entry — and thus every reversal — is functionally balanced.
+- Document vs functional currency are BOTH stored per line; a functional-currency (KRW==KRW) entry is
+  byte-identical to the pre-FX path (`fx_rate` NULL, `functional_amount` == `amount`).
 
 ## Key tables
 - `journal_entry` — extends `documentHeaderColumns()` (§4.2); tightened: `status` ∈ POSTED/REVERSED

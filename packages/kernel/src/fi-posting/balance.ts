@@ -29,21 +29,41 @@ export interface CurrencyTotals {
   credit: Money;
 }
 
-/** Total debits and credits per currency. */
-export function sumByCurrency(lines: readonly PostingLine[]): Map<string, CurrencyTotals> {
+/** A line carrying its functional-currency amount — the FX translation of the document `money`. */
+export interface FunctionalLine {
+  drCr: DrCr;
+  /** This line's amount translated into the company's functional (local) currency. */
+  functionalAmount: Money;
+}
+
+/** Tally debits/credits per currency over any line shape, given how to read its side and amount. */
+function totalsBy<T>(
+  lines: readonly T[],
+  amountOf: (line: T) => Money,
+  sideOf: (line: T) => DrCr,
+): Map<string, CurrencyTotals> {
   const totals = new Map<string, CurrencyTotals>();
   for (const line of lines) {
-    const { currency } = line.money;
-    let entry = totals.get(currency);
+    const money = amountOf(line);
+    let entry = totals.get(money.currency);
     if (!entry) {
-      const zero = line.money.withMinorUnits(0n);
+      const zero = money.withMinorUnits(0n);
       entry = { debit: zero, credit: zero };
-      totals.set(currency, entry);
+      totals.set(money.currency, entry);
     }
-    if (line.drCr === 'D') entry.debit = entry.debit.add(line.money);
-    else entry.credit = entry.credit.add(line.money);
+    if (sideOf(line) === 'D') entry.debit = entry.debit.add(money);
+    else entry.credit = entry.credit.add(money);
   }
   return totals;
+}
+
+/** Total debits and credits per document currency. */
+export function sumByCurrency(lines: readonly PostingLine[]): Map<string, CurrencyTotals> {
+  return totalsBy(
+    lines,
+    (l) => l.money,
+    (l) => l.drCr,
+  );
 }
 
 /** True iff every currency balances and there are at least two lines. */
@@ -64,6 +84,31 @@ export function assertBalanced(lines: readonly PostingLine[]): void {
     if (!debit.equals(credit)) {
       throw new Error(
         `unbalanced entry in ${currency}: debit ${debit.toDecimal()} != credit ${credit.toDecimal()}`,
+      );
+    }
+  }
+}
+
+/**
+ * Throw unless the entry balances in its functional currency (Σdebit == Σcredit per functional
+ * currency). The FX counterpart of {@link assertBalanced}: a cross-currency entry balances in the
+ * document currency by construction, but per-line translation + rounding can drift the functional
+ * sums by a few minor units — fi-posting injects an FX_ROUNDING line to close that gap and calls
+ * this to prove the tie-out before writing (the migration-0009 DB trigger re-checks it at COMMIT).
+ */
+export function assertFunctionalBalanced(lines: readonly FunctionalLine[]): void {
+  if (lines.length < 2) {
+    throw new Error('a journal entry needs at least two lines');
+  }
+  for (const [currency, { debit, credit }] of totalsBy(
+    lines,
+    (l) => l.functionalAmount,
+    (l) => l.drCr,
+  )) {
+    if (!debit.equals(credit)) {
+      throw new Error(
+        `functionally unbalanced in ${currency}: ` +
+          `debit ${debit.toDecimal()} != credit ${credit.toDecimal()}`,
       );
     }
   }

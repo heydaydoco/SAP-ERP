@@ -27,6 +27,13 @@ export interface JournalEntryInput {
   docType?: string;
   /** Document (transaction) currency — every line's money must be in it. */
   currency: CurrencyCode;
+  /**
+   * Optional manual document→functional FX-rate override (units of functional per 1 unit of
+   * `currency`, scale ≤ 6). FX-only: when omitted, `post()` resolves the 'M' rate from the fx_rate
+   * master on `documentDate`. Supplying it on an entry already in the functional currency is
+   * rejected. AR/AP invoices never set it (master rate only).
+   */
+  fxRate?: string;
   reference: string; // source doc reference, e.g. 'manual' or 'sales.billing:BIL-2026-0001'
   headerText?: string;
   lines: PostingLine[];

@@ -20,3 +20,14 @@ export const amountSchema = z.object({
   currency: currencyCodeSchema,
 });
 export type Amount = z.infer<typeof amountSchema>;
+
+/**
+ * Foreign-exchange rate: a positive decimal string at the fx_rate master scale `NUMERIC(18,6)`
+ * (units of the target currency per 1 unit of the source). Used for the optional manual-GL FX-rate
+ * override; the kernel `Money.convert` enforces the same scale-6 cap when it translates.
+ */
+export const fxRateSchema = z
+  .string()
+  .regex(/^\d{1,12}(\.\d{1,6})?$/, 'fx rate must be a positive decimal, NUMERIC(18,6)')
+  .refine((v) => Number(v) > 0, 'fx rate must be greater than zero');
+export type FxRateString = z.infer<typeof fxRateSchema>;

@@ -121,6 +121,7 @@ async function seed(): Promise<void> {
       { transactionKey: 'AR', glAccount: '1100' }, // 외상매출금
       { transactionKey: 'SALES_REVENUE', glAccount: '4000' }, // 제품매출
       { transactionKey: 'OUTPUT_VAT', glAccount: '2550' }, // 부가세예수금
+      { transactionKey: 'FX_ROUNDING', glAccount: '9800' }, // 외환차손익 (FX 라인별 환산 단수차이 plug)
     ]) {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -136,9 +137,13 @@ async function seed(): Promise<void> {
     ]) {
       await currencies.ensureCurrency(cur);
     }
+    // Foreign→KRW only: translation never reciprocates a stored rate, so a KRW→foreign document
+    // would need its own directional row added here (none yet — all demo FX documents are into KRW).
     for (const fx of [
       { fromCurrency: 'USD', toCurrency: 'KRW', rate: '1350.000000' },
       { fromCurrency: 'EUR', toCurrency: 'KRW', rate: '1450.000000' },
+      { fromCurrency: 'CNY', toCurrency: 'KRW', rate: '190.000000' },
+      { fromCurrency: 'JPY', toCurrency: 'KRW', rate: '9.000000' },
     ]) {
       await currencies.ensureFxRate({ rateType: 'M', validFrom: '2026-01-01', ...fx });
     }
@@ -162,6 +167,9 @@ async function seed(): Promise<void> {
       { accountNumber: '4000', name: '제품매출', accountType: 'REVENUE' as const },
       // 상품매입 — the AP (vendor) invoice debits this expense; AR credits revenue 4000.
       { accountNumber: '5000', name: '상품매입', accountType: 'EXPENSE' as const },
+      // 외환차손익 — FX_ROUNDING per-line translation plug. currency intentionally omitted (null =
+      // postable in any currency) so the 0-amount foreign line is not rejected (FX caution #1).
+      { accountNumber: '9800', name: '외환차손익', accountType: 'EXPENSE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',
@@ -248,7 +256,7 @@ async function seed(): Promise<void> {
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
         `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination + ` +
-        `master data (5 currencies / 2 fx rates / 7 GL accounts / 2 tax codes / cost center 1000 / ` +
+        `master data (5 currencies / 4 fx rates / 8 GL accounts / 2 tax codes / cost center 1000 / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000)`,
     );
   } finally {

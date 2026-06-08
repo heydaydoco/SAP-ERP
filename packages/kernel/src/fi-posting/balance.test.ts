@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { isBalanced, assertBalanced, sumByCurrency, type PostingLine } from './balance';
+import {
+  isBalanced,
+  assertBalanced,
+  assertFunctionalBalanced,
+  sumByCurrency,
+  type FunctionalLine,
+  type PostingLine,
+} from './balance';
 import { Money } from '../money/money';
 
 // Example unit test for the test toolchain (root CLAUDE.md §5.4: calculation logic is mandatory).
@@ -55,5 +62,32 @@ describe('fi-posting/balance', () => {
   it('requires at least two lines', () => {
     const one: PostingLine[] = [{ glAccount: 'x', drCr: 'D', money: Money.of('1.00', 'USD') }];
     expect(() => assertBalanced(one)).toThrow(/two lines/);
+  });
+});
+
+// assertFunctionalBalanced is the FX tie-out (root CLAUDE.md §5.4): Σdr == Σcr in the local currency.
+describe('fi-posting/assertFunctionalBalanced', () => {
+  // A USD invoice translated to KRW @1350: Dr AR 148,500 / Cr revenue 135,000 + output VAT 13,500.
+  const fxBilling: FunctionalLine[] = [
+    { drCr: 'D', functionalAmount: Money.of('148500', 'KRW') },
+    { drCr: 'C', functionalAmount: Money.of('135000', 'KRW') },
+    { drCr: 'C', functionalAmount: Money.of('13500', 'KRW') },
+  ];
+
+  it('accepts a functionally balanced entry', () => {
+    expect(() => assertFunctionalBalanced(fxBilling)).not.toThrow();
+  });
+
+  it('rejects a functional drift of even one minor unit', () => {
+    const drifted: FunctionalLine[] = [
+      { drCr: 'D', functionalAmount: Money.of('135001', 'KRW') },
+      { drCr: 'C', functionalAmount: Money.of('135000', 'KRW') },
+    ];
+    expect(() => assertFunctionalBalanced(drifted)).toThrow(/functionally unbalanced in KRW/);
+  });
+
+  it('requires at least two lines', () => {
+    const one: FunctionalLine[] = [{ drCr: 'D', functionalAmount: Money.of('1', 'KRW') }];
+    expect(() => assertFunctionalBalanced(one)).toThrow(/two lines/);
   });
 });
