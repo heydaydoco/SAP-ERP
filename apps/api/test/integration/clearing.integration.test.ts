@@ -55,6 +55,7 @@ describe.skipIf(!dockerAvailable)('finance-accounting clearing/payment (integrat
   let apInvoices: ApInvoiceService;
   let clearing: ClearingService;
   let accountDet: AccountDeterminationService;
+  let glAccounts: GlAccountService;
   let companyCodeId: string;
 
   const lineOf = (entry: { lines: { glAccount: string }[] }, gl: string) =>
@@ -94,7 +95,7 @@ describe.skipIf(!dockerAvailable)('finance-accounting clearing/payment (integrat
     const org = new OrgStructureService(db);
     const fiscal = new FiscalPeriodService(db);
     const numbering = new NumberingService(db);
-    const glAccounts = new GlAccountService(db);
+    glAccounts = new GlAccountService(db);
     const registry = new DbCurrencyRegistry(db);
     const currencies = new CurrencyService(db, registry);
     accountDet = new AccountDeterminationService(db);
@@ -112,7 +113,7 @@ describe.skipIf(!dockerAvailable)('finance-accounting clearing/payment (integrat
     );
     arInvoices = new ArInvoiceService(db, journals, partners, registry);
     apInvoices = new ApInvoiceService(db, journals, partners, registry);
-    clearing = new ClearingService(db, journals, accountDet, currencies, registry);
+    clearing = new ClearingService(db, journals, accountDet, currencies, registry, glAccounts);
 
     const company = await org.createCompanyCode({
       code: '1000',
@@ -562,6 +563,38 @@ describe.skipIf(!dockerAvailable)('finance-accounting clearing/payment (integrat
     for (const acc of ['1010', '9820']) {
       const row = tb.find((r) => r.glAccount === acc);
       expect(row?.balance).toBe('0.0000');
+    }
+  });
+
+  // 14 — currency guard. The cash leg is always the open item's currency (v1 has no separate payment
+  // currency, so cash and recon never differ); the realistic mismatch is a currency-PINNED cash
+  // account that cannot take the item's currency. Re-points BANK_CLEARING to a USD-pinned account,
+  // then restores it.
+  it('rejects clearing when the cash/clearing account is currency-pinned to another currency', async () => {
+    await glAccounts.ensureGlAccount({
+      chartOfAccounts: 'KR01',
+      accountNumber: '1011',
+      name: 'USD현금(통화고정)',
+      accountType: 'ASSET',
+      isReconciliation: false,
+      currency: 'USD', // pinned — cannot take a KRW cash line
+    });
+    await accountDet.defineRule({ chartOfAccounts: 'KR01', transactionKey: 'BANK_CLEARING', glAccount: '1011' });
+    try {
+      const bp = await newCustomer('C-CLR-14');
+      const invId = await arInvoiceKrw(bp, '10000', 'INV-CLR-14');
+      await expect(
+        clearing.clear({
+          companyCodeId,
+          partnerId: bp,
+          journalId: invId,
+          postingDate: '2026-03-20',
+          postingKey: 'itest:clr-14',
+        }),
+      ).rejects.toThrow(/cross-currency payment is out of v1 scope/);
+    } finally {
+      // Restore the currency-null clearing account so the rule is left as seeded.
+      await accountDet.defineRule({ chartOfAccounts: 'KR01', transactionKey: 'BANK_CLEARING', glAccount: '1010' });
     }
   });
 });

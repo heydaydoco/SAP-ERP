@@ -12,6 +12,7 @@ import { DB } from '../../../database/database.module.js';
 import { AccountDeterminationService } from '../../platform/admin-config/account-determination.service.js';
 import { CurrencyService } from '../../master-data/currency/currency.service.js';
 import { DbCurrencyRegistry } from '../../master-data/currency/db-currency-registry.js';
+import { GlAccountService } from '../../master-data/gl-account/gl-account.service.js';
 import {
   DOC_FLOW_TYPE,
   DOC_TYPE_AP_CLEARING,
@@ -80,6 +81,7 @@ export class ClearingService {
     private readonly accountDetermination: AccountDeterminationService,
     private readonly currencies: CurrencyService,
     private readonly registry: DbCurrencyRegistry,
+    private readonly glAccounts: GlAccountService,
   ) {}
 
   /** Clear one designated open AR/AP invoice in full; idempotent on the clearing posting key (§5.2). */
@@ -180,6 +182,17 @@ export class ClearingService {
       chartOfAccounts: company.chartOfAccounts,
       companyCode: company.code,
     });
+    // The cash leg is built in the OPEN ITEM's currency (v1 has no separate payment currency, so the
+    // cash and recon legs always share it). A determination-resolved cash account that is currency-
+    // PINNED to a different currency therefore cannot settle this item — reject early and clearly
+    // (resolveLines would also reject it at post time; cross-currency payment is out of v1 scope).
+    const bankGl = await this.glAccounts.getByNumber(company.chartOfAccounts, bankAccount);
+    if (bankGl.currency && bankGl.currency !== docCurrency) {
+      throw new BadRequestException(
+        `cash/clearing account ${bankAccount} is fixed to ${bankGl.currency}; cannot clear a ` +
+          `${docCurrency} item (cross-currency payment is out of v1 scope)`,
+      );
+    }
 
     // Sides: AR receipt debits cash and credits the receivable; AP payment credits cash and debits
     // the payable. The recon leg carries the partner (recon_partner_ck) and closes the open item.

@@ -96,7 +96,9 @@ per-counterparty VAT truncation (절사) flag (builder supports it; no master co
   `JournalService.post()` (the only writer; D4 — no second store): AR receipt `DZ` = Dr cash / Cr AR
   recon (+partner); AP payment `KZ` = Dr AP recon (+partner) / Cr cash. The cash/clearing account
   comes from `account_determination` (`BANK_CLEARING`, currency = null; a plain GL — bank-master is
-  later). **"Open" is DERIVED, never a flag on the immutable recon line:** the clearing links a
+  later). The cash leg is always the open item's currency (no separate payment currency in v1, so cash
+  and recon never differ); a currency-PINNED cash account of another currency is rejected
+  (cross-currency payment is out of scope). **"Open" is DERIVED, never a flag on the immutable recon line:** the clearing links a
   `CLEARS` doc_flow edge (clearing → invoice) in the posting tx, and an open item is a recon line
   whose journal is NOT a participant in a LIVE `CLEARS` edge (its clearing not REVERSED) —
   `listOpenItems` excludes BOTH the cleared invoice line and the clearing's own offsetting recon line,
