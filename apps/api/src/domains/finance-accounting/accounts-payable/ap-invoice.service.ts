@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { schema, type Database } from '@erp/db';
 import { Money, type PostingLine } from '@erp/kernel';
 import { DB } from '../../../database/database.module.js';
@@ -129,9 +129,12 @@ export class ApInvoiceService {
   }
 
   /**
-   * Open payables for a vendor: the AP recon-account lines carrying this partner. Every recon line is
-   * open until clearing arrives; each gets a derived due date and the balance nets credits − debits
-   * (so an unpaid payable reads positive; a reversal cancels its original to zero).
+   * Open payables for a vendor: the AP recon-account lines carrying this partner. A recon line drops
+   * out once it is settled by a LIVE clearing — its journal is the source OR target of a `CLEARS`
+   * doc_flow edge whose clearing document is still POSTED — which hides BOTH the cleared invoice line
+   * and the clearing's own offsetting line (a fully-cleared item shows zero open lines); a RESET
+   * re-opens it. Each remaining row gets a derived due date and the balance nets credits − debits (so
+   * an unpaid payable reads positive; a reversal cancels its original to zero).
    */
   async listOpenItems(q: ApOpenItemQuery) {
     const bp = await this.partners.getBp(q.partnerId);
@@ -162,6 +165,15 @@ export class ApInvoiceService {
           eq(schema.journalLine.partnerId, q.partnerId),
           eq(schema.journalLine.glAccount, reconAccount),
           eq(schema.journalLine.isReconAccount, true),
+          // Exclude lines settled by a live clearing (both the invoice and the clearing's own
+          // offsetting line); a reset (clearing REVERSED) makes the CLEARS edge non-live → re-opens.
+          sql`not exists (
+            select 1 from doc_flow cdf
+            join journal_entry clr on clr.id = cdf.source_id
+            where cdf.rel_type = 'CLEARS'
+              and clr.status = 'POSTED'
+              and (cdf.source_id = ${schema.journalEntry.id} or cdf.target_id = ${schema.journalEntry.id})
+          )`,
         ),
       )
       .orderBy(asc(schema.journalEntry.docNo));

@@ -80,6 +80,19 @@ async function seed(): Promise<void> {
       prefix: 'KR-2026-',
       padding: 6,
     });
+    // AR/AP clearing (payment) documents own their ranges too (SAP DZ/KZ), scoped per year.
+    await numbering.defineRange({
+      object: 'finance.ar_clearing',
+      scope: '2026',
+      prefix: 'DZ-2026-',
+      padding: 6,
+    });
+    await numbering.defineRange({
+      object: 'finance.ap_clearing',
+      scope: '2026',
+      prefix: 'KZ-2026-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -122,6 +135,10 @@ async function seed(): Promise<void> {
       { transactionKey: 'SALES_REVENUE', glAccount: '4000' }, // 제품매출
       { transactionKey: 'OUTPUT_VAT', glAccount: '2550' }, // 부가세예수금
       { transactionKey: 'FX_ROUNDING', glAccount: '9800' }, // 외환차손익 (FX 라인별 환산 단수차이 plug)
+      // Clearing slice: cash/bank clearing account + REALIZED FX gain/loss (economic, NOT the KDR plug).
+      { transactionKey: 'BANK_CLEARING', glAccount: '1010' }, // 현금클리어링 (결제가 닿는 계정)
+      { transactionKey: 'REALIZED_FX_GAIN', glAccount: '9810' }, // 외환차익 (실현)
+      { transactionKey: 'REALIZED_FX_LOSS', glAccount: '9820' }, // 외환차손 (실현)
     ]) {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -170,6 +187,12 @@ async function seed(): Promise<void> {
       // 외환차손익 — FX_ROUNDING per-line translation plug. currency intentionally omitted (null =
       // postable in any currency) so the 0-amount foreign line is not rejected (FX caution #1).
       { accountNumber: '9800', name: '외환차손익', accountType: 'EXPENSE' as const },
+      // Clearing slice accounts (all currency = null by omission, like 9800): the cash/clearing
+      // account the payment hits, and the REALIZED FX gain/loss accounts (their gain/loss line is
+      // 0 in the foreign document currency, so a currency-pinned account would reject it).
+      { accountNumber: '1010', name: '현금클리어링', accountType: 'ASSET' as const },
+      { accountNumber: '9810', name: '외환차익', accountType: 'REVENUE' as const },
+      { accountNumber: '9820', name: '외환차손', accountType: 'EXPENSE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',

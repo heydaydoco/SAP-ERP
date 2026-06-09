@@ -36,24 +36,32 @@ export const DOC_TYPE_REVERSAL = 'AB';
 /** Customer (AR) invoice ≈ SAP FB70; vendor (AP) invoice ≈ FB60 — both post through `post()`. */
 export const DOC_TYPE_AR_INVOICE = 'DR';
 export const DOC_TYPE_AP_INVOICE = 'KR';
+/** Customer payment/clearing ≈ SAP DZ; vendor payment/clearing ≈ SAP KZ — both post through `post()`. */
+export const DOC_TYPE_AR_CLEARING = 'DZ';
+export const DOC_TYPE_AP_CLEARING = 'KZ';
 
 /** Number-range objects — per-fiscal-year scope, seeded as e.g. (object, '2026', 'JE-2026-'). */
 const NUMBER_OBJECT = 'finance.journal_entry';
 const NUMBER_OBJECT_AR_INVOICE = 'finance.ar_invoice';
 const NUMBER_OBJECT_AP_INVOICE = 'finance.ap_invoice';
+const NUMBER_OBJECT_AR_CLEARING = 'finance.ar_clearing';
+const NUMBER_OBJECT_AP_CLEARING = 'finance.ap_clearing';
 
 /**
- * Pick the document number range for a doc type. AR/AP invoices draw from their own DR-/KR- ranges
- * (a posted document type owns its number range, SAP-style); everything else — manual SA and the AB
- * reversals (`reverse()` is intentionally left on the JE range) — uses the general journal range.
+ * Pick the document number range for a doc type. AR/AP invoices and AR/AP clearings each draw from
+ * their own range (a posted document type owns its number range, SAP-style: DR-/KR-/DZ-/KZ-);
+ * everything else — manual SA and the AB reversals (`reverse()` is intentionally left on the JE
+ * range, so a reset-clearing AB gets a JE- number) — uses the general journal range.
  */
 function numberObjectFor(docType: string): string {
   if (docType === DOC_TYPE_AR_INVOICE) return NUMBER_OBJECT_AR_INVOICE;
   if (docType === DOC_TYPE_AP_INVOICE) return NUMBER_OBJECT_AP_INVOICE;
+  if (docType === DOC_TYPE_AR_CLEARING) return NUMBER_OBJECT_AR_CLEARING;
+  if (docType === DOC_TYPE_AP_CLEARING) return NUMBER_OBJECT_AP_CLEARING;
   return NUMBER_OBJECT;
 }
 /** doc_flow node type for journal documents. */
-const DOC_FLOW_TYPE = 'finance.journal_entry';
+export const DOC_FLOW_TYPE = 'finance.journal_entry';
 
 /**
  * account_determination transaction key for the FX per-line rounding plug (SAP KDR — a technical
@@ -77,6 +85,25 @@ interface ResolvedLine extends PostingLine {
 interface TranslatedLine {
   line: ResolvedLine;
   functionalMoney: Money;
+}
+
+/** A doc_flow edge a posting spawns, written in the SAME tx as the journal (source = the new entry). */
+export interface PostDocFlowLink {
+  targetType: string;
+  targetId: string;
+  relType: string;
+}
+
+/**
+ * Optional side effects a caller can attach to a posting, all committed in the journal's transaction
+ * (§5.2 — they exist iff the journal does). Used by the clearing slice: a clearing posts through the
+ * same `post()` but links a `CLEARS` edge to the invoice it settles and emits its own event type.
+ */
+export interface PostOptions {
+  /** Extra doc_flow edges from the new journal (e.g. clearing → invoice, relType 'CLEARS'). */
+  docFlowLinks?: readonly PostDocFlowLink[];
+  /** Override the outbox event type (default 'finance.journal.posted'); e.g. 'finance.journal.cleared'. */
+  eventType?: string;
 }
 
 /**
@@ -113,7 +140,11 @@ export class JournalService implements FiPostingService {
    * Keys are scoped per company code (composite UNIQUE), so one tenant can neither read nor
    * hijack another's entry by supplying its key.
    */
-  async post(input: JournalEntryInput, actor = 'system'): Promise<PostedJournalEntry> {
+  async post(
+    input: JournalEntryInput,
+    actor = 'system',
+    opts?: PostOptions,
+  ): Promise<PostedJournalEntry> {
     const existing = await this.findByPostingKey(input.companyCodeId, input.postingKey);
     if (existing) return this.toPosted(existing);
 
@@ -229,10 +260,25 @@ export class JournalService implements FiPostingService {
           })),
         );
 
+        // Optional doc_flow edges (e.g. a clearing's CLEARS link to the invoice it settles), written
+        // in the SAME tx so the lineage exists iff the journal does — mirrors reverse()'s REVERSES edge.
+        for (const link of opts?.docFlowLinks ?? []) {
+          await this.docFlow.link(
+            {
+              sourceType: DOC_FLOW_TYPE,
+              sourceId: header.id,
+              targetType: link.targetType,
+              targetId: link.targetId,
+              relType: link.relType,
+            },
+            tx,
+          );
+        }
+
         // Same tx (§5.2): the event exists iff the journal does. Deterministic id = retry-safe.
         await this.outbox.enqueue(
           {
-            eventType: 'finance.journal.posted',
+            eventType: opts?.eventType ?? 'finance.journal.posted',
             eventId: this.eventId(input.companyCodeId, input.postingKey),
             payload: {
               journalId: header.id,
@@ -619,12 +665,27 @@ export class JournalService implements FiPostingService {
 
     let translated: TranslatedLine[];
     try {
-      translated = resolved.map((line) => ({
-        line,
-        functionalMoney: line.money.convert(rate, functionalCurrency, this.registry),
-      }));
+      translated = resolved.map((line) => {
+        // A line may carry an explicit functional amount the single document rate cannot express
+        // (clearing: the recon leg reverses at the ORIGINAL invoice-date functional value, the cash
+        // leg sits at the settlement rate, the realized FX gain/loss rides the difference). Use it
+        // verbatim; otherwise translate `money` on the document date like every ordinary line.
+        if (line.functionalAmount) {
+          if (line.functionalAmount.currency !== functionalCurrency) {
+            throw new BadRequestException(
+              `functional amount override is ${line.functionalAmount.currency}, not the functional ` +
+                `currency ${functionalCurrency}`,
+            );
+          }
+          return { line, functionalMoney: line.functionalAmount };
+        }
+        return {
+          line,
+          functionalMoney: line.money.convert(rate, functionalCurrency, this.registry),
+        };
+      });
     } catch (e) {
-      // A malformed/over-precise override rate surfaces here as a client error.
+      // A malformed/over-precise override rate (or a bad functional override) surfaces here.
       throw new BadRequestException((e as Error).message);
     }
 

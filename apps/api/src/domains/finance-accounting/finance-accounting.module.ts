@@ -7,6 +7,8 @@ import { ApInvoiceController } from './accounts-payable/ap-invoice.controller.js
 import { ApInvoiceService } from './accounts-payable/ap-invoice.service.js';
 import { ArInvoiceController } from './accounts-receivable/ar-invoice.controller.js';
 import { ArInvoiceService } from './accounts-receivable/ar-invoice.service.js';
+import { ClearingController } from './clearing/clearing.controller.js';
+import { ClearingService } from './clearing/clearing.service.js';
 import { JournalController } from './general-ledger/journal.controller.js';
 import { JournalService } from './general-ledger/journal.service.js';
 
@@ -15,12 +17,14 @@ import { JournalService } from './general-ledger/journal.service.js';
  * reserved in Phase 0 — `JournalService` is exported so sibling domains (sales/procurement later)
  * post through it (§3.2: every value-moving transaction flows through fi-posting). Slice 2 (PR-B)
  * adds the AR/AP invoice services, which post customer (`DR`) / vendor (`KR`) documents through that
- * same `JournalService.post()` with recon-account substitution and VAT lines.
+ * same `JournalService.post()` with recon-account substitution and VAT lines. The clearing slice adds
+ * `ClearingService`, which settles open AR/AP items (`DZ`/`KZ`) through the same writer, recognizing
+ * realized FX gain/loss and linking a `CLEARS` doc_flow edge.
  */
 @Module({
   imports: [PlatformModule, NumberingModule, AdminConfigModule, MasterDataModule],
-  providers: [JournalService, ArInvoiceService, ApInvoiceService],
-  controllers: [JournalController, ArInvoiceController, ApInvoiceController],
-  exports: [JournalService, ArInvoiceService, ApInvoiceService],
+  providers: [JournalService, ArInvoiceService, ApInvoiceService, ClearingService],
+  controllers: [JournalController, ArInvoiceController, ApInvoiceController, ClearingController],
+  exports: [JournalService, ArInvoiceService, ApInvoiceService, ClearingService],
 })
 export class FinanceAccountingModule {}
