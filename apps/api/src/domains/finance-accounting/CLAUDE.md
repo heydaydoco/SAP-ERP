@@ -11,6 +11,8 @@
   same `JournalService.post()` with recon-account substitution + VAT lines (`invoice-posting/`
   holds the shared, unit-tested tax-line builder). **No `ar_invoice`/`ap_invoice` tables (D4)** —
   the journal IS the document; open items are the recon lines filtered by partner.
+- `clearing` ✅ — manual full clearing of open AR/AP items (`DZ`/`KZ`) through the same
+  `JournalService.post()`, recognizing realized FX gain/loss; reset via `reverse()`.
 - `fixed-assets` · `tax` · `bank-reconciliation` · `period-close` · `financial-statements` — later
 
 ## Status
@@ -20,11 +22,17 @@ end-to-end — balanced posting, period lock, idempotency, reversal, trial balan
 reads (no migration — journal-only). **FX slice:** cross-currency translation through the same
 `post()` — kernel `Money.convert`, per-line translation on the document date, an FX_ROUNDING plug for
 the functional tie-out, optional manual-GL rate override, and the migration-**0009** functional-balance
-backstop trigger. Deferred: **realized** FX gain/loss (needs clearing/payment-run) and **unrealized**
-period-end revaluation (needs period-close + auto-reversal) — both absent until those runs land;
-payment/clearing (open items all-open until then), draft/parking, `journal_line` partitioning, the
-outbox relay worker, the per-counterparty VAT truncation (절사) flag (builder supports it; no master
-column yet); full Korean 세금계산서 공급가액 KRW statutory conversion (per-line translation approximates it).
+backstop trigger. **Clearing slice:** manual FULL clearing of open AR/AP items through the same
+`post()` — a `DZ`/`KZ` document moves the open item's gross against a determination-resolved cash
+account and recognizes **realized** FX gain/loss (recon closes at the original invoice-date functional
+value, cash at the settlement-date rate, the difference to `REALIZED_FX_GAIN`/`LOSS`); "open" stays
+derived via a `CLEARS` doc_flow edge; reset = `reverse()` of the clearing. **No migration** (doc_flow
+rel-type, account-determination keys, doc types, and `functional_amount` all already exist). Deferred:
+**unrealized** period-end revaluation (needs period-close + auto-reversal); **partial** clearing
+(residual item) and the **payment-run** batch; **bank-master / bank-reconciliation** (clearing hits a
+plain cash GL for now); draft/parking, `journal_line` partitioning, the outbox relay worker, the
+per-counterparty VAT truncation (절사) flag (builder supports it; no master column yet); full Korean
+세금계산서 공급가액 KRW statutory conversion (per-line translation approximates it).
 
 > **Note:** The backbone. Owns journal_entry/journal_line. Enforce immutability + reversal-only +
 > period locking (§5.1). Hosts the concrete fi-posting service from the kernel.
@@ -84,6 +92,29 @@ column yet); full Korean 세금계산서 공급가액 KRW statutory conversion (
   every posted FX entry — and thus every reversal — is functionally balanced.
 - Document vs functional currency are BOTH stored per line; a functional-currency (KRW==KRW) entry is
   byte-identical to the pre-FX path (`fx_rate` NULL, `functional_amount` == `amount`).
+- **Clearing / payment (clearing slice):** a clearing is a NEW journal posted through the same
+  `JournalService.post()` (the only writer; D4 — no second store): AR receipt `DZ` = Dr cash / Cr AR
+  recon (+partner); AP payment `KZ` = Dr AP recon (+partner) / Cr cash. The cash/clearing account
+  comes from `account_determination` (`BANK_CLEARING`, currency = null; a plain GL — bank-master is
+  later). The cash leg is always the open item's currency (no separate payment currency in v1, so cash
+  and recon never differ); a currency-PINNED cash account of another currency is rejected
+  (cross-currency payment is out of scope). **"Open" is DERIVED, never a flag on the immutable recon line:** the clearing links a
+  `CLEARS` doc_flow edge (clearing → invoice) in the posting tx, and an open item is a recon line
+  whose journal is NOT a participant in a LIVE `CLEARS` edge (its clearing not REVERSED) —
+  `listOpenItems` excludes BOTH the cleared invoice line and the clearing's own offsetting recon line,
+  so a fully-cleared item shows zero open lines. **Realized FX (foreign items):** the recon leg closes
+  at the open item's ORIGINAL `functional_amount` (carried via the kernel `PostingLine.functionalAmount`
+  override, since `post()` otherwise translates every line at one document rate), the cash leg sits at
+  the **settlement-date** 'M' rate (a second `resolveRate` on the clearing date), and the functional
+  residue posts to `REALIZED_FX_GAIN` (credit) / `REALIZED_FX_LOSS` (debit) from `account_determination`
+  (currency = null — the gain/loss line is 0 in the foreign document currency). This is **economic**
+  gain/loss, distinct from the `FX_ROUNDING` (SAP KDR) technical plug; the clearing service hands
+  `post()` already-functionally-balanced lines so the auto-plug never fires. v1 is FULL clearing only
+  (amount ≠ gross ⇒ rejected) and MANUAL single-item (payment-run later). **Reset-clearing (SAP FBRA)**
+  = `reverse()` the clearing document: it copies `functional_amount` verbatim (the realized gain/loss
+  reverses exactly, no re-translation), nets to zero in both currencies, and makes the `CLEARS` edge
+  non-live ⇒ the item re-opens automatically (the AB reset draws the JE range). Idempotent on the
+  clearing key (`clr:<invoiceJournalId>` default); re-clearing a reset item needs a fresh key.
 
 ## Key tables
 - `journal_entry` — extends `documentHeaderColumns()` (§4.2); tightened: `status` ∈ POSTED/REVERSED
@@ -101,13 +132,19 @@ column yet); full Korean 세금계산서 공급가액 KRW statutory conversion (
   line) / Cr output VAT (Σ per tax code). `GET .../ar-invoices/open-items?companyCodeId&partnerId`.
 - `POST /finance-accounting/ap-invoices` → `KR`: Dr expense (per line) / Dr input VAT / Cr AP recon
   (gross, +partner). `GET .../ap-invoices/open-items?companyCodeId&partnerId`.
+- `POST /finance-accounting/clearings` → `DZ`/`KZ`: clears one open AR/AP invoice in full against the
+  `BANK_CLEARING` cash account, books realized FX gain/loss on foreign items, links a `CLEARS` edge.
+- `POST /finance-accounting/clearings/:id/reset` → reset-clearing: `reverse()` of the clearing
+  document (`AB`, JE range), re-opening the item.
 
 ## Domain events
-- `finance.journal.posted` / `finance.journal.reversed` — outbox rows written in the SAME
-  transaction as the journal (§5.2); the relay worker (Phase-0 follow-up) dispatches them.
-  No in-process publish from inside the posting transaction.
+- `finance.journal.posted` / `finance.journal.reversed` / `finance.journal.cleared` — outbox rows
+  written in the SAME transaction as the journal (§5.2); the relay worker (Phase-0 follow-up)
+  dispatches them. No in-process publish from inside the posting transaction. (A clearing emits
+  `finance.journal.cleared`; its reset emits `finance.journal.reversed` like any reversal.)
 
 ## Permissions
 `finance:journal:post` · `finance:journal:reverse` · `finance:journal:read` ·
-`finance:ar_invoice:{post,read}` · `finance:ap_invoice:{post,read}`
+`finance:ar_invoice:{post,read}` · `finance:ap_invoice:{post,read}` ·
+`finance:clearing:{post,reset}`
 (ADMIN `*` covers them; no seed rows / migration — declared on the controllers.)

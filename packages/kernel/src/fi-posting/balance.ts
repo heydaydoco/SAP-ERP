@@ -15,6 +15,16 @@ export interface PostingLine {
   drCr: DrCr;
   /** Non-negative money for this line. */
   money: Money;
+  /**
+   * Explicit functional-currency amount for this line, bypassing the document-date FX translation.
+   * OMIT for ordinary postings (the posting service translates `money` on the document date). SET it
+   * only when a line must carry a functional value the single document rate cannot express — e.g.
+   * clearing reverses an open item at its ORIGINAL invoice-date functional value while the cash leg
+   * sits at the settlement-date rate, and the realized FX gain/loss rides the difference. Must be in
+   * the company's functional currency. On a functional-currency (doc == functional) entry it is
+   * ignored (functional == document by definition).
+   */
+  functionalAmount?: Money;
   /** Subledger partner — REQUIRED when `glAccount` is a reconciliation account (AR/AP). */
   partnerId?: string;
   /** CO object; the posting service allows it on P&L (revenue/expense) lines only. */
