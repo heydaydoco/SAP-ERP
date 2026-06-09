@@ -22,6 +22,7 @@
     "db:generate": "pnpm --filter @erp/db db:generate",
     "db:migrate": "pnpm --filter @erp/db db:migrate",
     "seed": "pnpm --filter @erp/api seed",
+    "openapi": "pnpm --filter @erp/api build && pnpm --filter @erp/api openapi:gen && pnpm --filter @erp/api-client gen:types",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down"
   },
