@@ -13,6 +13,8 @@ import { OutboxService } from '../../src/domains/platform/outbox/outbox.service.
 import { DocFlowService } from '../../src/domains/platform/doc-flow/doc-flow.service.js';
 import { GlAccountService } from '../../src/domains/master-data/gl-account/gl-account.service.js';
 import { DbCurrencyRegistry } from '../../src/domains/master-data/currency/db-currency-registry.js';
+import { CurrencyService } from '../../src/domains/master-data/currency/currency.service.js';
+import { AccountDeterminationService } from '../../src/domains/platform/admin-config/account-determination.service.js';
 import { BusinessPartnerService } from '../../src/domains/master-data/business-partner/business-partner.service.js';
 import { JournalService } from '../../src/domains/finance-accounting/general-ledger/journal.service.js';
 import { ArInvoiceService } from '../../src/domains/finance-accounting/accounts-receivable/ar-invoice.service.js';
@@ -70,6 +72,8 @@ describe.skipIf(!dockerAvailable)('finance-accounting AR/AP invoices (integratio
       new DocFlowService(db),
       glAccounts,
       registry,
+      new CurrencyService(db, registry),
+      new AccountDeterminationService(db),
     );
     arInvoices = new ArInvoiceService(db, journals, partners, registry);
     apInvoices = new ApInvoiceService(db, journals, partners, registry);

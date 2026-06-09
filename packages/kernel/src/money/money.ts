@@ -12,6 +12,10 @@ import { ISO_4217, MONEY_DB_SCALE, type CurrencyRegistry } from './currency';
 const DECIMAL_RE = /^-?\d{1,14}(\.\d{1,6})?$/;
 const NUMERIC_RE = /^-?\d{1,14}(\.\d{1,4})?$/;
 
+/** FX rates are stored at the fx_rate master scale NUMERIC(18,6): ≤12 integer + ≤6 fraction digits. */
+const FX_RATE_SCALE = 6;
+const FX_RATE_RE = /^\d{1,12}(\.\d+)?$/;
+
 function pow10(n: number): bigint {
   let r = 1n;
   for (let i = 0; i < n; i++) r *= 10n;
@@ -131,6 +135,43 @@ export class Money {
     const numerator = BigInt(intPart + fracPart) * (neg ? -1n : 1n);
     const denominator = 100n * pow10(fracPart.length);
     return this.multiplyRounded(numerator, denominator);
+  }
+
+  /**
+   * Translate this amount into `targetCurrency` at `rate` — the units of target currency per 1 unit
+   * of THIS currency (SAP-style direct quote into the functional currency). Pure integer math,
+   * rounded **half away from zero** to the target's minor unit:
+   *
+   *   tgtMinor = round_half_away( S · R · 10^eT / (10^6 · 10^eS) )
+   *
+   * where S = this.minorUnits, eS/eT = this/target minor-unit exponents, and R = `rate` as a scale-6
+   * integer (the fx_rate master is NUMERIC(18,6); a finer rate is rejected). Used per line by
+   * fi-posting to compute functional amounts; the rate itself is resolved by the service (master
+   * fx_rate on the document date, or an explicit manual override) and is NEVER reciprocated here —
+   * a KRW→foreign translation needs its own directional rate row. `registry` supplies the target's
+   * exponent (a {@link CurrencyRegistry}, NOT the fx_rate table — the service resolves the rate first).
+   */
+  convert(
+    rate: string | number,
+    targetCurrency: CurrencyCode,
+    registry: CurrencyRegistry = ISO_4217,
+  ): Money {
+    const { minorUnit: eT } = registry.get(targetCurrency);
+    const str = typeof rate === 'number' ? String(rate) : rate.trim();
+    if (!FX_RATE_RE.test(str)) throw new Error(`invalid fx rate: "${str}"`);
+    const [intPart = '0', fracPart = ''] = str.split('.');
+    if (fracPart.length > FX_RATE_SCALE) {
+      throw new Error(`fx rate "${str}" allows at most ${FX_RATE_SCALE} decimals`);
+    }
+    const r = BigInt(intPart + fracPart.padEnd(FX_RATE_SCALE, '0'));
+    if (r <= 0n) throw new Error(`fx rate must be positive: "${str}"`);
+    const num = this.minorUnits * r * pow10(eT);
+    const den = pow10(FX_RATE_SCALE) * pow10(this.minorUnit);
+    const negative = num < 0n;
+    const abs = negative ? -num : num;
+    // floor((2*abs + den) / (2*den)) rounds the magnitude half away from zero.
+    const rounded = (abs * 2n + den) / (den * 2n);
+    return Money.fromMinorUnits(negative ? -rounded : rounded, targetCurrency, registry);
   }
 
   /** this.minorUnits * num / den, rounded half away from zero. `den` must be positive. */

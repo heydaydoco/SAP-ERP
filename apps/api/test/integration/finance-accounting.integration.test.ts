@@ -14,6 +14,8 @@ import { OutboxService } from '../../src/domains/platform/outbox/outbox.service.
 import { DocFlowService } from '../../src/domains/platform/doc-flow/doc-flow.service.js';
 import { GlAccountService } from '../../src/domains/master-data/gl-account/gl-account.service.js';
 import { DbCurrencyRegistry } from '../../src/domains/master-data/currency/db-currency-registry.js';
+import { CurrencyService } from '../../src/domains/master-data/currency/currency.service.js';
+import { AccountDeterminationService } from '../../src/domains/platform/admin-config/account-determination.service.js';
 import { JournalService } from '../../src/domains/finance-accounting/general-ledger/journal.service.js';
 import {
   JOURNAL_EVENT_NAMESPACE,
@@ -81,6 +83,8 @@ describe.skipIf(!dockerAvailable)('finance-accounting general-ledger (integratio
       new DocFlowService(db),
       glAccounts,
       registry,
+      new CurrencyService(db, registry),
+      new AccountDeterminationService(db),
     );
 
     const company = await org.createCompanyCode({

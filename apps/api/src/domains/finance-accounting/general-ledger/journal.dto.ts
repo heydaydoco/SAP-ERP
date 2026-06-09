@@ -1,4 +1,10 @@
-import { currencyCodeSchema, drCrSchema, moneySchema, paginationQuerySchema } from '@erp/shared';
+import {
+  currencyCodeSchema,
+  drCrSchema,
+  fxRateSchema,
+  moneySchema,
+  paginationQuerySchema,
+} from '@erp/shared';
 import { z } from 'zod';
 
 /** Journal request DTOs (Zod). The manual-entry shape the controller maps onto the kernel input. */
@@ -28,6 +34,12 @@ export const createManualJournalSchema = z.object({
   /** Business-event date; defaults to the posting date. */
   documentDate: isoDate.optional(),
   currency: currencyCodeSchema,
+  /**
+   * Optional FX-rate override (document→functional, units of functional per 1 unit of `currency`).
+   * FX-only: omit for a functional-currency entry (supplying one there is rejected) and for any
+   * entry whose 'M' master rate on the document date should apply. Scale ≤ 6.
+   */
+  fxRate: fxRateSchema.optional(),
   reference: z.string().min(1).max(128).default('manual'),
   headerText: z.string().min(1).max(256).optional(),
   /**

@@ -91,3 +91,36 @@ describe('Money.percentage — rate rounding', () => {
     expect(() => Money.of('1.00', 'USD').percentage('abc')).toThrow(/invalid percentage/);
   });
 });
+
+// convert() is the FX translation path (root CLAUDE.md §5.4): per-line document→functional amount.
+describe('Money.convert — FX translation', () => {
+  it('translates to a 0-decimal functional currency (USD/EUR → KRW)', () => {
+    expect(Money.of('100.00', 'USD').convert('1350', 'KRW').toDecimal()).toBe('135000');
+    expect(Money.of('100.00', 'EUR').convert('1450', 'KRW').toDecimal()).toBe('145000');
+  });
+
+  it('rounds half away from zero to the target minor unit', () => {
+    // 33.33 × 1350 = 44,995.5 → 44,996 (half up); 33.34 × 1350 = 45,009.0 → 45,009 (exact).
+    expect(Money.of('33.33', 'USD').convert('1350', 'KRW').toDecimal()).toBe('44996');
+    expect(Money.of('33.34', 'USD').convert('1350', 'KRW').toDecimal()).toBe('45009');
+    // Symmetric for a negative magnitude (away from zero, not toward it).
+    expect(Money.of('-33.33', 'USD').convert('1350', 'KRW').toDecimal()).toBe('-44996');
+  });
+
+  it('honours a scale-6 rate', () => {
+    // 1.00 USD × 1234.567890 = 1234.56789 → 1235 KRW.
+    expect(Money.of('1.00', 'USD').convert('1234.567890', 'KRW').toDecimal()).toBe('1235');
+  });
+
+  it('translates into a multi-decimal target currency (USD → BHD, 3 decimals)', () => {
+    // 10.00 USD × 0.376 = 3.760 BHD.
+    expect(Money.of('10.00', 'USD').convert('0.376', 'BHD').toDecimal()).toBe('3.760');
+  });
+
+  it('rejects a rate finer than the master scale, non-positive, or malformed', () => {
+    expect(() => Money.of('1.00', 'USD').convert('1.1234567', 'KRW')).toThrow(/at most 6 decimals/);
+    expect(() => Money.of('1.00', 'USD').convert('0', 'KRW')).toThrow(/must be positive/);
+    expect(() => Money.of('1.00', 'USD').convert('-1', 'KRW')).toThrow(/invalid fx rate/);
+    expect(() => Money.of('1.00', 'USD').convert('abc', 'KRW')).toThrow(/invalid fx rate/);
+  });
+});
