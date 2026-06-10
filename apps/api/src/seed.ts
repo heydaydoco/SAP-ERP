@@ -13,6 +13,7 @@ import { TaxCodeService } from './domains/master-data/tax-code/tax-code.service.
 import { CostCenterService } from './domains/master-data/cost-center/cost-center.service.js';
 import { BusinessPartnerService } from './domains/master-data/business-partner/business-partner.service.js';
 import { MaterialService } from './domains/master-data/material/material.service.js';
+import { MaterialValuationService } from './domains/inventory-warehouse/inventory/material-valuation.service.js';
 
 /**
  * Idempotent dev seed: creates an ADMIN role (permission `*`), an admin user, and a couple of demo
@@ -36,6 +37,7 @@ async function seed(): Promise<void> {
     const costCenters = app.get(CostCenterService);
     const partners = app.get(BusinessPartnerService);
     const materials = app.get(MaterialService);
+    const valuations = app.get(MaterialValuationService);
 
     const username = process.env.ADMIN_USERNAME ?? 'admin';
     const password = process.env.ADMIN_PASSWORD ?? 'admin123';
@@ -93,6 +95,13 @@ async function seed(): Promise<void> {
       prefix: 'KZ-2026-',
       padding: 6,
     });
+    // Goods movements own their document range (SAP material document essence), scoped per year.
+    await numbering.defineRange({
+      object: 'inventory.goods_movement',
+      scope: '2026',
+      prefix: 'GM-2026-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -139,6 +148,12 @@ async function seed(): Promise<void> {
       { transactionKey: 'BANK_CLEARING', glAccount: '1010' }, // 현금클리어링 (결제가 닿는 계정)
       { transactionKey: 'REALIZED_FX_GAIN', glAccount: '9810' }, // 외환차익 (실현)
       { transactionKey: 'REALIZED_FX_LOSS', glAccount: '9820' }, // 외환차손 (실현)
+      // Inventory slice (§4.5): BSX = stock account / GBB = offsetting account, discriminated by
+      // valuation class (3000 raw materials · 7920 finished goods — SAP convention).
+      { transactionKey: 'BSX', valuationClass: '3000', glAccount: '1300' }, // 원재료
+      { transactionKey: 'BSX', valuationClass: '7920', glAccount: '1310' }, // 제품
+      { transactionKey: 'GBB', valuationClass: '3000', glAccount: '5100' }, // 원재료비(상대)
+      { transactionKey: 'GBB', valuationClass: '7920', glAccount: '5110' }, // 제품재고변동(상대)
     ]) {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -193,6 +208,11 @@ async function seed(): Promise<void> {
       { accountNumber: '1010', name: '현금클리어링', accountType: 'ASSET' as const },
       { accountNumber: '9810', name: '외환차익', accountType: 'REVENUE' as const },
       { accountNumber: '9820', name: '외환차손', accountType: 'EXPENSE' as const },
+      // Inventory slice: BSX stock accounts + GBB offsets the determination rules resolve to.
+      { accountNumber: '1300', name: '원재료', accountType: 'ASSET' as const },
+      { accountNumber: '1310', name: '제품', accountType: 'ASSET' as const },
+      { accountNumber: '5100', name: '원재료비', accountType: 'EXPENSE' as const },
+      { accountNumber: '5110', name: '제품재고변동', accountType: 'EXPENSE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',
@@ -267,7 +287,7 @@ async function seed(): Promise<void> {
       hsCode: '8471606000',
       countryOfOrigin: 'KR',
     });
-    await materials.ensureMaterial({
+    const rawId = await materials.ensureMaterial({
       code: 'RM-2000',
       name: 'ABS Resin Pellet',
       materialType: 'RAW',
@@ -275,12 +295,26 @@ async function seed(): Promise<void> {
       materialGroup: 'CHEM',
     });
 
+    // Inventory accounting views (§4.4 extension): the valuation row must exist BEFORE the first
+    // goods movement (the movement engine locks it to serialize MAP recalculation). Idempotent.
+    await valuations.ensureValuation({
+      materialId: finishedId,
+      plantId,
+      valuationClass: '7920',
+    });
+    await valuations.ensureValuation({
+      materialId: rawId,
+      plantId,
+      valuationClass: '3000',
+    });
+
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
         `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
-        `fiscal year 2026 (12 open periods) + KR01 account determination + ` +
-        `master data (5 currencies / 4 fx rates / 8 GL accounts / 2 tax codes / cost center 1000 / ` +
-        `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000)`,
+        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB) + ` +
+        `master data (5 currencies / 4 fx rates / 12 GL accounts / 2 tax codes / cost center 1000 / ` +
+        `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000 / ` +
+        `2 material valuations at plant 1010: FG-1000=7920 + RM-2000=3000)`,
     );
   } finally {
     await app.close();

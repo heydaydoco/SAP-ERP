@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { schema, type Database } from '@erp/db';
+import { schema, type Database, type DbExecutor } from '@erp/db';
 import { DB } from '../../../database/database.module.js';
 import type { CreateGlAccountDto } from './gl-account.dto.js';
 
@@ -95,8 +95,10 @@ export class GlAccountService {
   }
 
   /** Look up by the (chart, account number) natural key — the shape journal lines carry. */
-  async getByNumber(chartOfAccounts: string, accountNumber: string) {
-    const [row] = await this.db
+  // In-tx posting paths pass their transaction so the lookup rides that connection
+  // (pool-starvation-safe under concurrency) — same pattern as NumberingService.next.
+  async getByNumber(chartOfAccounts: string, accountNumber: string, db: DbExecutor = this.db) {
+    const [row] = await db
       .select()
       .from(schema.glAccount)
       .where(this.key(chartOfAccounts, accountNumber));

@@ -71,6 +71,13 @@
       "when": 1780905600000,
       "tag": "0009_functional_balance_backstop",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781067237832,
+      "tag": "0010_gigantic_brother_voodoo",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, or, sql } from 'drizzle-orm';
-import { schema, type Database } from '@erp/db';
+import { schema, type Database, type DbExecutor } from '@erp/db';
 import type { AccountDeterminationKey, AccountDeterminationResolver } from '@erp/kernel';
 import { DB } from '../../../database/database.module.js';
 import type { CreateAccountDeterminationDto } from './admin-config.dto.js';
@@ -53,9 +53,11 @@ export class AccountDeterminationService implements AccountDeterminationResolver
    * are '' (wildcard); the most specific match (most non-wildcard discriminators) wins. Throws if no
    * rule matches (§4.5 — no hard-coded fallback).
    */
-  async resolve(key: AccountDeterminationKey): Promise<string> {
+  // The optional executor widens the kernel interface (like DocFlowService.link): in-tx posting
+  // paths pass their transaction so the lookup rides that connection (pool-starvation-safe).
+  async resolve(key: AccountDeterminationKey, db: DbExecutor = this.db): Promise<string> {
     const t = schema.accountDetermination;
-    const rows = await this.db
+    const rows = await db
       .select()
       .from(t)
       .where(

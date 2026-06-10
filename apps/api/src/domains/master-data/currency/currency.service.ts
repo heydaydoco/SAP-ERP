@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { schema, type Database } from '@erp/db';
+import { schema, type Database, type DbExecutor } from '@erp/db';
 import { DB } from '../../../database/database.module.js';
 import type { CreateCurrencyDto, CreateFxRateDto } from './currency.dto.js';
 import { DbCurrencyRegistry } from './db-currency-registry.js';
@@ -175,8 +175,16 @@ export class CurrencyService {
   }
 
   /** Resolve the rate effective on `onDate` via the pure helper; 404 when none is effective yet. */
-  async resolveRate(fromCurrency: string, toCurrency: string, onDate: string, rateType = 'M') {
-    const candidates = await this.db
+  // In-tx posting paths pass their transaction so the lookup rides that connection
+  // (pool-starvation-safe under concurrency) — same pattern as NumberingService.next.
+  async resolveRate(
+    fromCurrency: string,
+    toCurrency: string,
+    onDate: string,
+    rateType = 'M',
+    db: DbExecutor = this.db,
+  ) {
+    const candidates = await db
       .select({ validFrom: schema.fxRate.validFrom, rate: schema.fxRate.rate })
       .from(schema.fxRate)
       .where(

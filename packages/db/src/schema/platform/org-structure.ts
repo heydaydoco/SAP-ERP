@@ -56,7 +56,12 @@ export const storageLocation = pgTable(
       .references(() => plant.id),
     ...auditColumns(),
   },
-  (t) => [unique('storage_location_uq').on(t.plantId, t.code)],
+  (t) => [
+    unique('storage_location_uq').on(t.plantId, t.code),
+    // (id, plant_id) target for composite FKs: lets dependents (inventory `stock`) pin their
+    // denormalized plant_id to THIS location's plant at the DB level, not just in services.
+    unique('storage_location_id_plant_uq').on(t.id, t.plantId),
+  ],
 );
 
 /** Sales organization (영업조직) — the SD selling unit under a company code. */
