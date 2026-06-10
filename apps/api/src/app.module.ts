@@ -4,6 +4,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 import { DatabaseModule } from './database/database.module.js';
 import { FinanceAccountingModule } from './domains/finance-accounting/finance-accounting.module.js';
+import { InventoryWarehouseModule } from './domains/inventory-warehouse/inventory-warehouse.module.js';
 import { MasterDataModule } from './domains/master-data/master-data.module.js';
 import { AdminConfigModule } from './domains/platform/admin-config/admin-config.module.js';
 import { AuthModule } from './domains/platform/auth/auth.module.js';
@@ -34,6 +35,7 @@ import { HealthController } from './health.controller.js';
     AdminConfigModule,
     MasterDataModule,
     FinanceAccountingModule,
+    InventoryWarehouseModule,
   ],
   controllers: [HealthController],
   providers: [

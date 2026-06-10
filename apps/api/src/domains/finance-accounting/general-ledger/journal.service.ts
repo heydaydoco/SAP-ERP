@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { schema, type Database } from '@erp/db';
+import { schema, type Database, type DbExecutor, type Transaction } from '@erp/db';
 import {
   assertBalanced,
   assertFunctionalBalanced,
@@ -104,6 +104,19 @@ export interface PostOptions {
   docFlowLinks?: readonly PostDocFlowLink[];
   /** Override the outbox event type (default 'finance.journal.posted'); e.g. 'finance.journal.cleared'. */
   eventType?: string;
+  /**
+   * Join the CALLER's open transaction instead of opening one (additive — omitting it keeps the
+   * pre-existing self-managed-tx behavior unchanged). The §5.2 foundation for a domain that must
+   * commit its own state change atomically with the journal (inventory stock + valuation first;
+   * the pattern is domain-generic). Two contract shifts in this mode, both on the caller:
+   *  - a concurrent-duplicate unique violation is rethrown, NOT replayed — the caller's tx is
+   *    already aborted, so returning the winner would lie about the rolled-back work. The caller
+   *    catches its own idempotency-gate violation and replays at its level.
+   *  - the journal exists iff the caller's tx commits.
+   * Pre-check reads (idempotency, masters, period lock, FX) ride the SAME `tx` connection — a
+   * pool read inside a caller-held transaction can starve when concurrent posts hold every slot.
+   */
+  tx?: Transaction;
 }
 
 /**
@@ -145,10 +158,26 @@ export class JournalService implements FiPostingService {
     actor = 'system',
     opts?: PostOptions,
   ): Promise<PostedJournalEntry> {
-    const existing = await this.findByPostingKey(input.companyCodeId, input.postingKey);
-    if (existing) return this.toPosted(existing);
+    // All pre-check reads ride the caller's tx when one is supplied: a connection-pool read
+    // inside a caller-held transaction can starve when concurrent posts hold every pool slot.
+    const ex: DbExecutor = opts?.tx ?? this.db;
 
-    const company = await this.getCompany(input.companyCodeId);
+    const existing = await this.findByPostingKey(input.companyCodeId, input.postingKey, ex);
+    if (existing) {
+      // Caller-tx mode: replay semantics belong to the CALLER's own idempotency gate, which runs
+      // before it ever opens the tx — an existing journal here is a foreign/colliding key, and
+      // silently pairing the caller's NEW state with an OLD journal would drift the subledger
+      // from the GL. Refuse loudly instead (the §5.2 exactly-once contract stays at the caller).
+      if (opts?.tx) {
+        throw new ConflictException(
+          `posting key '${input.postingKey}' is already posted — a caller-transaction post needs ` +
+            `a fresh key`,
+        );
+      }
+      return this.toPosted(existing);
+    }
+
+    const company = await this.getCompany(input.companyCodeId, ex);
 
     // FX: the document currency may differ from the company's functional currency. The rate override
     // is FX-only — rejecting it on a functional-currency entry keeps the KRW==KRW path unambiguous.
@@ -182,12 +211,13 @@ export class JournalService implements FiPostingService {
     }
 
     // Period lock (§5.1) + the year/period stamp for the header.
-    const period = await this.fiscal.resolveOpenPeriod(input.companyCodeId, input.postingDate);
+    const period = await this.fiscal.resolveOpenPeriod(input.companyCodeId, input.postingDate, ex);
 
     const resolved = await this.resolveLines(
       input.lines,
       company.chartOfAccounts,
       input.companyCodeId,
+      ex,
     );
 
     // Translate each line into the functional currency, plugging an FX entry's per-line rounding
@@ -202,105 +232,110 @@ export class JournalService implements FiPostingService {
       isFx,
       input.fxRate,
       documentDate,
+      ex,
     );
 
     const docType = input.docType ?? DOC_TYPE_MANUAL;
-    let journalId: string;
-    try {
-      journalId = await this.db.transaction(async (tx) => {
-        // Inside the tx so a rollback never burns a gap-free number. AR/AP docs use their own range.
-        const no = await this.numbering.next(
-          numberObjectFor(docType),
-          String(period.fiscalYear),
-          tx,
-        );
-        const [header] = await tx
-          .insert(schema.journalEntry)
-          .values({
-            docType,
-            docNo: no,
-            status: 'POSTED',
-            postingKey: input.postingKey,
-            companyCodeId: input.companyCodeId,
-            postingDate: input.postingDate,
-            documentDate: input.documentDate ?? input.postingDate,
-            fiscalYear: period.fiscalYear,
-            periodNo: period.periodNo,
-            fiscalPeriodId: period.fiscalPeriodId,
-            currency: input.currency,
-            functionalCurrency: company.currency,
-            // Doc→functional rate snapshot; NULL for a functional-currency (KRW==KRW) entry.
-            fxRate,
-            reference: input.reference,
-            headerText: input.headerText ?? null,
-            createdBy: actor,
-            updatedBy: actor,
-          })
-          .returning({ id: schema.journalEntry.id });
-        if (!header) throw new Error('journal_entry insert returned no row');
+    // The atomic write set — runs in our own tx by default, or joins the caller's (PostOptions.tx).
+    const writeEntry = async (tx: Transaction): Promise<string> => {
+      // Inside the tx so a rollback never burns a gap-free number. AR/AP docs use their own range.
+      const no = await this.numbering.next(
+        numberObjectFor(docType),
+        String(period.fiscalYear),
+        tx,
+      );
+      const [header] = await tx
+        .insert(schema.journalEntry)
+        .values({
+          docType,
+          docNo: no,
+          status: 'POSTED',
+          postingKey: input.postingKey,
+          companyCodeId: input.companyCodeId,
+          postingDate: input.postingDate,
+          documentDate: input.documentDate ?? input.postingDate,
+          fiscalYear: period.fiscalYear,
+          periodNo: period.periodNo,
+          fiscalPeriodId: period.fiscalPeriodId,
+          currency: input.currency,
+          functionalCurrency: company.currency,
+          // Doc→functional rate snapshot; NULL for a functional-currency (KRW==KRW) entry.
+          fxRate,
+          reference: input.reference,
+          headerText: input.headerText ?? null,
+          createdBy: actor,
+          updatedBy: actor,
+        })
+        .returning({ id: schema.journalEntry.id });
+      if (!header) throw new Error('journal_entry insert returned no row');
 
-        await tx.insert(schema.journalLine).values(
-          lines.map(({ line, functionalMoney }, i) => ({
-            journalEntryId: header.id,
-            lineNo: i + 1,
-            glAccount: line.glAccount,
-            drCr: line.drCr,
-            amount: line.money.toNumeric(),
-            currency: line.money.currency,
-            // The line translated into the functional currency (== amount when doc == functional).
-            functionalAmount: functionalMoney.toNumeric(),
-            functionalCurrency: company.currency,
-            isReconAccount: line.isReconAccount,
-            partnerId: line.partnerId ?? null,
-            costCenterId: line.costCenterId ?? null,
-            taxCode: line.taxCode ?? null,
-            lineText: line.lineText ?? null,
-            createdBy: actor,
-            updatedBy: actor,
-          })),
-        );
+      await tx.insert(schema.journalLine).values(
+        lines.map(({ line, functionalMoney }, i) => ({
+          journalEntryId: header.id,
+          lineNo: i + 1,
+          glAccount: line.glAccount,
+          drCr: line.drCr,
+          amount: line.money.toNumeric(),
+          currency: line.money.currency,
+          // The line translated into the functional currency (== amount when doc == functional).
+          functionalAmount: functionalMoney.toNumeric(),
+          functionalCurrency: company.currency,
+          isReconAccount: line.isReconAccount,
+          partnerId: line.partnerId ?? null,
+          costCenterId: line.costCenterId ?? null,
+          taxCode: line.taxCode ?? null,
+          lineText: line.lineText ?? null,
+          createdBy: actor,
+          updatedBy: actor,
+        })),
+      );
 
-        // Optional doc_flow edges (e.g. a clearing's CLEARS link to the invoice it settles), written
-        // in the SAME tx so the lineage exists iff the journal does — mirrors reverse()'s REVERSES edge.
-        for (const link of opts?.docFlowLinks ?? []) {
-          await this.docFlow.link(
-            {
-              sourceType: DOC_FLOW_TYPE,
-              sourceId: header.id,
-              targetType: link.targetType,
-              targetId: link.targetId,
-              relType: link.relType,
-            },
-            tx,
-          );
-        }
-
-        // Same tx (§5.2): the event exists iff the journal does. Deterministic id = retry-safe.
-        await this.outbox.enqueue(
+      // Optional doc_flow edges (e.g. a clearing's CLEARS link to the invoice it settles), written
+      // in the SAME tx so the lineage exists iff the journal does — mirrors reverse()'s REVERSES edge.
+      for (const link of opts?.docFlowLinks ?? []) {
+        await this.docFlow.link(
           {
-            eventType: opts?.eventType ?? 'finance.journal.posted',
-            eventId: this.eventId(input.companyCodeId, input.postingKey),
-            payload: {
-              journalId: header.id,
-              docType,
-              docNo: no,
-              postingKey: input.postingKey,
-              companyCodeId: input.companyCodeId,
-              fiscalYear: period.fiscalYear,
-              periodNo: period.periodNo,
-              currency: input.currency,
-              reference: input.reference,
-              lineCount: lines.length,
-            },
+            sourceType: DOC_FLOW_TYPE,
+            sourceId: header.id,
+            targetType: link.targetType,
+            targetId: link.targetId,
+            relType: link.relType,
           },
           tx,
         );
+      }
 
-        return header.id;
-      });
+      // Same tx (§5.2): the event exists iff the journal does. Deterministic id = retry-safe.
+      await this.outbox.enqueue(
+        {
+          eventType: opts?.eventType ?? 'finance.journal.posted',
+          eventId: this.eventId(input.companyCodeId, input.postingKey),
+          payload: {
+            journalId: header.id,
+            docType,
+            docNo: no,
+            postingKey: input.postingKey,
+            companyCodeId: input.companyCodeId,
+            fiscalYear: period.fiscalYear,
+            periodNo: period.periodNo,
+            currency: input.currency,
+            reference: input.reference,
+            lineCount: lines.length,
+          },
+        },
+        tx,
+      );
+
+      return header.id;
+    };
+
+    let journalId: string;
+    try {
+      journalId = opts?.tx ? await writeEntry(opts.tx) : await this.db.transaction(writeEntry);
     } catch (e) {
       // Concurrent duplicate post: the UNIQUE(company, posting_key) gate fired — replay the winner.
-      if (isUniqueViolation(e, 'journal_entry_posting_key_uq')) {
+      // In caller-tx mode the surrounding tx is already aborted, so no replay (see PostOptions.tx).
+      if (!opts?.tx && isUniqueViolation(e, 'journal_entry_posting_key_uq')) {
         const winner = await this.findByPostingKey(input.companyCodeId, input.postingKey);
         if (winner) return this.toPosted(winner);
       }
@@ -330,6 +365,20 @@ export class JournalService implements FiPostingService {
       .from(schema.journalEntry)
       .where(eq(schema.journalEntry.id, journalId));
     if (!original) throw new NotFoundException(`journal entry ${journalId} not found`);
+
+    // Subledger-anchored journals must be corrected through their OWNING document, never via FI
+    // reversal: a journal whose value mirrors a separate physical store (inventory's stock_value)
+    // would, if reversed here, move the GL while the subledger stays put — permanent drift. A
+    // 'POSTS' doc_flow edge pointing AT this journal marks that ownership (e.g. a goods movement;
+    // SAP FB08 likewise refuses MM-originated FI docs — the correction is MBST). Clearing journals
+    // are safe: they are SOURCES of 'CLEARS' edges, never TARGETS of 'POSTS' edges.
+    const incoming = await this.docFlow.backward(DOC_FLOW_TYPE, journalId);
+    if (incoming.some((edge) => edge.relType === 'POSTS')) {
+      throw new ConflictException(
+        `journal ${journalId} is owned by a subledger document (a 'POSTS' doc-flow edge) and must ` +
+          `be corrected through that document, not reversed directly`,
+      );
+    }
 
     if (original.status === 'REVERSED') {
       if (!original.reversedById) {
@@ -574,8 +623,8 @@ export class JournalService implements FiPostingService {
     );
   }
 
-  private async getCompany(companyCodeId: string) {
-    const [company] = await this.db
+  private async getCompany(companyCodeId: string, db: DbExecutor = this.db) {
+    const [company] = await db
       .select()
       .from(schema.companyCode)
       .where(eq(schema.companyCode.id, companyCodeId));
@@ -597,10 +646,11 @@ export class JournalService implements FiPostingService {
     lines: readonly PostingLine[],
     chartOfAccounts: string,
     companyCodeId: string,
+    db: DbExecutor = this.db,
   ): Promise<ResolvedLine[]> {
     const resolved: ResolvedLine[] = [];
     for (const line of lines) {
-      const account = await this.glAccounts.getByNumber(chartOfAccounts, line.glAccount);
+      const account = await this.glAccounts.getByNumber(chartOfAccounts, line.glAccount, db);
       if (account.currency && account.currency !== line.money.currency) {
         throw new BadRequestException(
           `gl account ${line.glAccount} is fixed to ${account.currency} and cannot take a ` +
@@ -619,7 +669,7 @@ export class JournalService implements FiPostingService {
             `cost center is only allowed on P&L lines; ${line.glAccount} is ${account.accountType}`,
           );
         }
-        const [costCenter] = await this.db
+        const [costCenter] = await db
           .select({ companyCodeId: schema.costCenter.companyCodeId })
           .from(schema.costCenter)
           .where(eq(schema.costCenter.id, line.costCenterId));
@@ -651,6 +701,7 @@ export class JournalService implements FiPostingService {
     isFx: boolean,
     override: string | undefined,
     documentDate: string,
+    db: DbExecutor = this.db,
   ): Promise<{ fxRate: string | null; lines: TranslatedLine[] }> {
     if (!isFx) {
       return {
@@ -661,7 +712,8 @@ export class JournalService implements FiPostingService {
 
     const functionalCurrency = company.currency;
     const rate =
-      override ?? (await this.resolveDocRate(documentCurrency, functionalCurrency, documentDate));
+      override ??
+      (await this.resolveDocRate(documentCurrency, functionalCurrency, documentDate, db));
 
     let translated: TranslatedLine[];
     try {
@@ -698,11 +750,14 @@ export class JournalService implements FiPostingService {
     if (residue !== 0n) {
       // KDR rounding plug: 0 in the document currency, the residue in the functional currency, on the
       // short side. account_determination supplies the GL account (must be currency=null, see above).
-      const roundingAccount = await this.accountDetermination.resolve({
-        transactionKey: FX_ROUNDING_KEY,
-        chartOfAccounts: company.chartOfAccounts,
-        companyCode: company.code,
-      });
+      const roundingAccount = await this.accountDetermination.resolve(
+        {
+          transactionKey: FX_ROUNDING_KEY,
+          chartOfAccounts: company.chartOfAccounts,
+          companyCode: company.code,
+        },
+        db,
+      );
       const [roundLine] = await this.resolveLines(
         [
           {
@@ -713,6 +768,7 @@ export class JournalService implements FiPostingService {
         ],
         company.chartOfAccounts,
         company.id,
+        db,
       );
       if (!roundLine) throw new Error('fx rounding line failed to resolve');
       translated.push({
@@ -738,8 +794,13 @@ export class JournalService implements FiPostingService {
   }
 
   /** Resolve the document→functional 'M' rate effective on the document date (never reciprocated). */
-  private async resolveDocRate(from: string, to: string, onDate: string): Promise<string> {
-    const resolved = await this.currencies.resolveRate(from, to, onDate, 'M');
+  private async resolveDocRate(
+    from: string,
+    to: string,
+    onDate: string,
+    db: DbExecutor = this.db,
+  ): Promise<string> {
+    const resolved = await this.currencies.resolveRate(from, to, onDate, 'M', db);
     return resolved.rate;
   }
 
@@ -748,8 +809,12 @@ export class JournalService implements FiPostingService {
     return uuidV5(`${companyCodeId}:${postingKey}`, JOURNAL_EVENT_NAMESPACE);
   }
 
-  private async findByPostingKey(companyCodeId: string, postingKey: string) {
-    const [row] = await this.db
+  private async findByPostingKey(
+    companyCodeId: string,
+    postingKey: string,
+    db: DbExecutor = this.db,
+  ) {
+    const [row] = await db
       .select()
       .from(schema.journalEntry)
       .where(

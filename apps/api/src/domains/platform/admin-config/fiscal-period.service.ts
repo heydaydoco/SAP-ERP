@@ -1,6 +1,6 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
-import { schema, type Database } from '@erp/db';
+import { schema, type Database, type DbExecutor } from '@erp/db';
 import { DB } from '../../../database/database.module.js';
 
 /** Two-digit zero-padded string. */
@@ -123,8 +123,11 @@ export class FiscalPeriodService {
   async resolveOpenPeriod(
     companyCodeId: string,
     date: string,
+    // Callers posting inside their own transaction pass it so the check rides that connection
+    // (pool-starvation-safe under concurrency) — same pattern as NumberingService.next.
+    db: DbExecutor = this.db,
   ): Promise<{ fiscalPeriodId: string; fiscalYear: number; periodNo: number }> {
-    const row = await this.findCoveringPeriod(companyCodeId, date);
+    const row = await this.findCoveringPeriod(companyCodeId, date, db);
     if (!row) {
       throw new NotFoundException(
         `no fiscal period covers ${date} for company code ${companyCodeId}`,
@@ -136,8 +139,8 @@ export class FiscalPeriodService {
     return { fiscalPeriodId: row.periodId, fiscalYear: row.year, periodNo: row.periodNo };
   }
 
-  private async findCoveringPeriod(companyCodeId: string, date: string) {
-    const [row] = await this.db
+  private async findCoveringPeriod(companyCodeId: string, date: string, db: DbExecutor = this.db) {
+    const [row] = await db
       .select({
         periodId: schema.fiscalPeriod.id,
         periodNo: schema.fiscalPeriod.periodNo,
