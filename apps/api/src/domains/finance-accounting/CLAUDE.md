@@ -75,6 +75,12 @@ per-counterparty VAT truncation (절사) flag (builder supports it; no master co
   세금계산서 합계세액, not a doc-total round), half-away rounded (D2). A tax code with a NULL
   `gl_account`, or of the wrong `kind` for the side (OUTPUT for AR / INPUT for AP), is rejected. The
   due date is **derived** (document_date + `payment_terms_days`), never stored.
+- **The recon / open-item model is producer-agnostic.** `ApInvoiceService` is not the only source of
+  a `KR` AP open item — a caller-tx poster may raise the SAME open item by calling `post(…, { tx })`
+  directly and reusing the recon substitution + the tax-line builder (e.g. procurement's
+  invoice-verification debits GR/IR `WRX` instead of expense, then a `POSTS` doc_flow edge makes that
+  `KR` journal subledger-owned). "Open" stays the derived recon-line/`CLEARS` model, so clearing pays
+  such an item unchanged — one open-item model, many producers, no second store (D4).
 - **FX / cross-currency (FX slice):** when the document currency ≠ the company's functional currency,
   `post()` translates each line into the functional currency with the kernel `Money.convert`
   (half-away, scale-6 rate), keyed on the **document date** (SAP WWERT/BLDAT — same rate that states

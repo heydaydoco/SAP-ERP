@@ -1,0 +1,40 @@
+/**
+ * Procurement shared constants — doc types, doc_flow node/edge names, account-determination keys, and
+ * number-range objects used across purchase-order / goods-receipt / invoice-verification.
+ */
+
+/** Document types (SAP BLART/essence) owned by procurement documents. */
+export const DOC_TYPE_PURCHASE_ORDER = 'PO';
+export const DOC_TYPE_INVOICE_VERIFICATION = 'IV';
+
+/** doc_flow node types (§4.3). PO/IV documents and the PO item granularity 3-way match works at. */
+export const DOC_FLOW_TYPE_PO = 'procurement.purchase_order';
+export const DOC_FLOW_TYPE_PO_ITEM = 'procurement.purchase_order_item';
+export const DOC_FLOW_TYPE_IV = 'procurement.invoice_verification';
+
+/**
+ * doc_flow node type for an inventory goods-movement LINE — the SOURCE of a GR's per-item `RECEIVES`
+ * edge (mirrors inventory's `DOC_FLOW_ITEM_TYPE`). The received-qty aggregation joins on the
+ * `goods_movement_item` PK, so this is a redundant-but-explicit guard that the edge's source really
+ * is a movement line (intent-clarifying; never matches anything else).
+ */
+export const DOC_FLOW_TYPE_GM_ITEM = 'inventory.goods_movement_item';
+
+/**
+ * doc_flow relationships: a GR RECEIVES a PO (item); an IV INVOICES a PO; an IV POSTS its AP journal.
+ * `POSTS` matches the literal the FI reverse-guard checks — an IV's KR journal is thereby
+ * subledger-owned (FI reverse refused; correction is a future IV-cancel, not a bare GL reversal).
+ */
+export const REL_RECEIVES = 'RECEIVES';
+export const REL_INVOICES = 'INVOICES';
+export const REL_POSTS = 'POSTS';
+
+/**
+ * account_determination transaction key for GR/IR clearing (입고미착, SAP WRX). The GR credits it,
+ * the IV debits it; the pair self-clears per PO item. Never hard-coded (§4.5).
+ */
+export const WRX_KEY = 'WRX';
+
+/** Number-range objects (SAP Number Range). PO is global-scoped; IV is per-fiscal-year. */
+export const NUMBER_OBJECT_PO = 'procurement.purchase_order';
+export const NUMBER_OBJECT_IV = 'procurement.invoice_verification';
