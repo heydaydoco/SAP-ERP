@@ -366,6 +366,11 @@ export class GoodsMovementService {
             unitPrice: priced ? formatScaled6(parseScaled6(item.unitPrice ?? '0')) : null,
             amount: amount.toNumeric(),
             currency,
+            // Import-GR trade trace (passthrough; NULL for domestic/direct — see the DTO). The
+            // valuation `amount`/`currency` above stay KRW: the caller pre-translated the price.
+            documentCurrency: item.documentCurrency ?? null,
+            exchangeRate: item.exchangeRate ?? null,
+            documentAmount: item.documentAmount ?? null,
             createdBy: actor,
             updatedBy: actor,
           });

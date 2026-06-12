@@ -18,6 +18,10 @@ goods movements + inventory↔GL reconciliation (migration **0010**). Slice 2 (p
 the **caller-options hook** on `GoodsMovementService.post()` — `offsetKey` (default `GBB`; a
 PO-linked GR passes `WRX`) + caller doc_flow links (header / per-item `RECEIVES` edges), all inside
 the movement's own tx; the public REST path is unchanged (PO-free movements stay byte-identical).
+Slice 3 (import procurement) added PASSTHROUGH import trade-trace columns on `goods_movement_item`
+(`document_currency` / `exchange_rate` / `document_amount`, migration **0012**): the engine persists
+them but still values stock ONLY in the functional currency — a foreign GR's KRW is pre-translated by
+the procurement caller (Option P), so the engine and the `material_valuation` invariant are untouched.
 Deferred: PR, landed cost, movement **reversal** (102/202 — the doc framework's reversal-pair
 columns are deliberately absent until then), negative stock, FIFO, transfer postings, batch/serial,
 physical-inventory documents (711/712 post directly today), UI screens, OpenAPI registry entries
@@ -99,7 +103,10 @@ physical-inventory documents (711/712 post directly today), UI screens, OpenAPI 
   (plant, posting_key); `movement_type` CHECK ∈ {561,101,201,711,712}; `doc_no` `GM-<year>-NNNNNN`
   from number range `inventory.goods_movement` (per-fiscal-year scope).
 - `goods_movement_item` — qty > 0 (magnitude; direction lives on the header type), `unit_price`
-  (receipts), `amount` = the exact stock_value delta (= journal line amount).
+  (receipts, ALWAYS in the functional currency — an import GR's caller pre-translates), `amount` = the
+  exact stock_value delta (= journal line amount, functional currency). Import trade trace (0012):
+  `document_currency` / `exchange_rate` / `document_amount` (NULL domestic) — PASSTHROUGH audit, never
+  valued from.
 
 ## FI postings
 - `POST /inventory-warehouse/goods-movements` → journal `WE` (receipts 561/101/712:

@@ -74,15 +74,33 @@ export const goodsMovementItem = pgTable(
     qty: quantityCol('qty').notNull(),
     /** External price per unit — REQUIRED on priced receipts (561/101), absent otherwise. */
     unitPrice: numeric('unit_price', { precision: 18, scale: 6 }),
-    /** The exact stock_value delta this item posted (= the journal line amount), NUMERIC(18,4). */
+    /** The exact stock_value delta this item posted (= the journal line amount), NUMERIC(18,4).
+     *  ALWAYS in the functional/valuation currency below — for an import GR the caller (procurement)
+     *  has already translated the foreign value to KRW at the GR-date rate, so the engine and the MAP
+     *  invariant stay functional-currency-only (KRW in → KRW out). */
     amount: moneyCol('amount').notNull(),
     currency: currencyCol('currency').notNull(),
+    /**
+     * Import-GR trade trace (all NULL for a domestic, functional-currency movement — the PO-free
+     * REST path never sets them, so direct movements are byte-identical). A procurement import GR
+     * stamps the FOREIGN document currency, the GR-date 'M' rate it translated at, and the foreign
+     * value of the line, so the foreign basis survives for the GR/IR (입고미착) open report, the IV's
+     * WRX relief reconstruction, and the next landed-cost slice. The valuation `amount`/`currency`
+     * above are unaffected — they remain the KRW the engine posted.
+     */
+    documentCurrency: currencyCol('document_currency'),
+    exchangeRate: numeric('exchange_rate', { precision: 18, scale: 6 }),
+    documentAmount: moneyCol('document_amount'),
   },
   (t) => [
     unique('goods_movement_item_no_uq').on(t.goodsMovementId, t.lineNo),
     check('goods_movement_item_qty_pos_ck', sql`${t.qty} > 0`),
     check('goods_movement_item_amount_nonneg_ck', sql`${t.amount} >= 0`),
     check('goods_movement_item_unit_price_nonneg_ck', sql`${t.unitPrice} is null or ${t.unitPrice} >= 0`),
+    check(
+      'goods_movement_item_doc_amount_nonneg_ck',
+      sql`${t.documentAmount} is null or ${t.documentAmount} >= 0`,
+    ),
     index('goods_movement_item_material_idx').on(t.materialId),
   ],
 );

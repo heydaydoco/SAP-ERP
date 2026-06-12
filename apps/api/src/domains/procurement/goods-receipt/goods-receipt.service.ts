@@ -1,14 +1,18 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { schema, type Database } from '@erp/db';
+import { Money } from '@erp/kernel';
+import type { CurrencyCode } from '@erp/shared';
 import { DB } from '../../../database/database.module.js';
 import {
   GoodsMovementService,
   type GoodsMovementPostOptions,
   type PostedGoodsMovement,
 } from '../../inventory-warehouse/goods-movement/goods-movement.service.js';
-import { formatScaled6, parseScaled6 } from '../../inventory-warehouse/inventory/map.js';
+import { formatScaled6, parseScaled6, receiptValue } from '../../inventory-warehouse/inventory/map.js';
 import type { CreateGoodsMovementDto } from '../../inventory-warehouse/goods-movement/goods-movement.dto.js';
+import { CurrencyService } from '../../master-data/currency/currency.service.js';
+import { DbCurrencyRegistry } from '../../master-data/currency/db-currency-registry.js';
 import { ProcurementQueryService } from '../procurement-query.service.js';
 import {
   DOC_FLOW_TYPE_PO,
@@ -16,6 +20,7 @@ import {
   REL_RECEIVES,
   WRX_KEY,
 } from '../procurement.constants.js';
+import { functionalUnitPrice6 } from './import-valuation.js';
 import type { CreateGoodsReceiptDto } from './goods-receipt.dto.js';
 
 /**
@@ -36,6 +41,14 @@ const OVER_DELIVERY_TOLERANCE_BP = 0n;
  * The price comes from the PO item (101 is a priced receipt); quantity comes from the GR request.
  * Over-delivery beyond tolerance is rejected against the DERIVED received quantity. A GR receives
  * lines of ONE plant (a goods movement has a single plant); split across plants into separate GRs.
+ *
+ * **Foreign-currency (import) PO (Option P — engine unchanged):** the goods-movement engine values
+ * stock ONLY in the functional currency (the `material_valuation` KRW invariant), so this
+ * orchestrator translates the foreign PO unit price to a functional-currency unit price at the
+ * GR-date 'M' rate and hands the engine KRW (the journal is a plain KRW document — Dr BSX / Cr WRX in
+ * KRW). The foreign trade trace (document currency, the GR-date rate, the foreign value) is stamped
+ * on each `goods_movement_item` for the GR/IR open report, the IV's WRX relief, and the later
+ * landed-cost slice. A domestic PO skips all of this and is byte-identical to before.
  */
 @Injectable()
 export class GoodsReceiptService {
@@ -43,6 +56,8 @@ export class GoodsReceiptService {
     @Inject(DB) private readonly db: Database,
     private readonly movements: GoodsMovementService,
     private readonly query: ProcurementQueryService,
+    private readonly currencies: CurrencyService,
+    private readonly registry: DbCurrencyRegistry,
   ) {}
 
   async post(dto: CreateGoodsReceiptDto, actor = 'system'): Promise<PostedGoodsMovement> {
@@ -109,7 +124,24 @@ export class GoodsReceiptService {
       }
     }
 
-    // Build the internal goods-movement document: priced 101 receipt at the PO price.
+    // Foreign (import) PO: the goods-movement engine values stock only in the functional currency, so
+    // resolve the GR-date 'M' rate and translate each foreign unit price to KRW here (Option P — the
+    // engine stays KRW-in/KRW-out). The rate is keyed on the GR document date (SAP WWERT/BLDAT, the
+    // same convention fi-posting uses). A domestic PO skips this entirely.
+    const [company] = await this.db
+      .select({ currency: schema.companyCode.currency })
+      .from(schema.companyCode)
+      .where(eq(schema.companyCode.id, po.companyCodeId));
+    if (!company) throw new NotFoundException(`company code ${po.companyCodeId} not found`);
+    const isFx = po.currency !== company.currency;
+    const grDate = dto.documentDate ?? dto.postingDate;
+    const grRate = isFx
+      ? (await this.currencies.resolveRate(po.currency, company.currency, grDate, 'M')).rate
+      : null;
+    const foreignZero = isFx ? Money.zero(po.currency as CurrencyCode, this.registry) : null;
+
+    // Build the internal goods-movement document: priced 101 receipt. Domestic = the PO price as-is;
+    // import = the foreign price translated to KRW, plus the foreign trade trace on each line.
     const movementDto: CreateGoodsMovementDto = {
       plantId,
       movementType: '101',
@@ -119,11 +151,21 @@ export class GoodsReceiptService {
       postingKey: dto.postingKey,
       items: dto.items.map((line) => {
         const poItem = poItemById.get(line.purchaseOrderItemId)!;
-        return {
+        const base = {
           materialId: poItem.materialId,
           storageLocationId: line.storageLocationId ?? poItem.storageLocationId,
           qty: line.qty,
-          unitPrice: poItem.unitPrice,
+        };
+        if (!isFx) return { ...base, unitPrice: poItem.unitPrice };
+        const foreignPrice6 = parseScaled6(poItem.unitPrice);
+        const foreignValue = receiptValue(parseScaled6(line.qty), foreignPrice6, foreignZero!);
+        return {
+          ...base,
+          // Foreign price → KRW unit price at the GR-date rate; the engine values qty × this in KRW.
+          unitPrice: formatScaled6(functionalUnitPrice6(foreignPrice6, grRate!)),
+          documentCurrency: po.currency as CurrencyCode,
+          exchangeRate: grRate!,
+          documentAmount: foreignValue.toNumeric(),
         };
       }),
     };

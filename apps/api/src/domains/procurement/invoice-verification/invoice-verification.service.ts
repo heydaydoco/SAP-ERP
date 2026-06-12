@@ -15,6 +15,7 @@ import { AccountDeterminationService } from '../../platform/admin-config/account
 import { DocFlowService } from '../../platform/doc-flow/doc-flow.service.js';
 import { NumberingService } from '../../platform/numbering/numbering.service.js';
 import { BusinessPartnerService } from '../../master-data/business-partner/business-partner.service.js';
+import { CurrencyService } from '../../master-data/currency/currency.service.js';
 import { DbCurrencyRegistry } from '../../master-data/currency/db-currency-registry.js';
 import {
   DOC_FLOW_TYPE as JOURNAL_DOC_FLOW_TYPE,
@@ -32,6 +33,8 @@ import {
   DOC_FLOW_TYPE_PO,
   DOC_TYPE_INVOICE_VERIFICATION,
   NUMBER_OBJECT_IV,
+  REALIZED_FX_GAIN_KEY,
+  REALIZED_FX_LOSS_KEY,
   REL_INVOICES,
   REL_POSTS,
   WRX_KEY,
@@ -89,6 +92,7 @@ export class InvoiceVerificationService {
     private readonly accountDetermination: AccountDeterminationService,
     private readonly query: ProcurementQueryService,
     private readonly registry: DbCurrencyRegistry,
+    private readonly currencies: CurrencyService,
   ) {}
 
   async post(
@@ -115,13 +119,10 @@ export class InvoiceVerificationService {
         `invoice currency ${dto.currency} must equal the PO currency ${po.currency}`,
       );
     }
-    if (dto.currency !== company.currency) {
-      // Domestic slice: foreign-currency IV (with GR/IR FX) is a later slice.
-      throw new BadRequestException(
-        `invoice currency ${dto.currency} must equal the company functional currency ` +
-          `${company.currency} in this slice`,
-      );
-    }
+    // Foreign (import) invoice: WRX is relieved at the GR-date functional value and the rate
+    // difference vs the invoice date posts to realized FX (REUSING the clearing-slice #13 pattern).
+    // The 3-way match compares foreign price-to-price (FX-neutral, both in the PO/invoice currency).
+    const isFx = dto.currency !== company.currency;
 
     const bp = await this.partners.getBp(po.vendorBpId);
     if (!bp.vendor) {
@@ -180,6 +181,39 @@ export class InvoiceVerificationService {
       throw new BadRequestException(`3-way match failed — ${violations.join(' | ')}`);
     }
 
+    // Foreign (import) IV v1 = FULL match only: each PO item invoiced once, in full, so the WRX
+    // relief is the WHOLE GR-booked functional value (no partial-rate apportioning). Partial /
+    // multi-document foreign IV (and the proportional WRX relief it needs) is a later slice.
+    if (isFx) {
+      if (new Set(poItemIds).size !== poItemIds.length) {
+        throw new BadRequestException(
+          'a foreign-currency invoice may reference each PO item once (partial/multi-line foreign IV is a later slice)',
+        );
+      }
+      for (const line of dto.items) {
+        const poItem = poItemById.get(line.purchaseOrderItemId)!;
+        const recv = received.get(poItem.id);
+        const prior = invoiced.get(poItem.id);
+        if (!recv || recv.qty6 === 0n) {
+          throw new BadRequestException(
+            `nothing received against PO item line ${poItem.lineNo} to invoice`,
+          );
+        }
+        if (prior && prior.qty6 > 0n) {
+          throw new BadRequestException(
+            `PO item line ${poItem.lineNo} is already partly invoiced — a foreign-currency IV must ` +
+              `fully match in one document (partial foreign IV is a later slice)`,
+          );
+        }
+        if (parseScaled6(line.invoicedQty) !== recv.qty6) {
+          throw new BadRequestException(
+            `a foreign-currency IV must invoice the full received quantity ` +
+              `${formatScaled6(recv.qty6)} on PO item line ${poItem.lineNo} (partial foreign IV is a later slice)`,
+          );
+        }
+      }
+    }
+
     // Build the invoice lines: each invoiced net (qty × invoice price) debits GR/IR; the tax-line
     // builder aggregates input VAT per code; the gross credits the AP recon (with the vendor partner).
     const currency = dto.currency as CurrencyCode;
@@ -204,23 +238,93 @@ export class InvoiceVerificationService {
       'HALF_UP',
     );
 
-    const lines: PostingLine[] = [
-      ...nets.map(
-        (n): PostingLine => ({
-          glAccount: grIrAccount,
-          drCr: 'D',
-          money: n.net,
-          taxCode: n.taxCode,
-          lineText: `GR/IR ${formatScaled6(n.qty6)} @ ${poItemRef(n.poItem.lineNo)}`,
+    const wrxLine = (n: (typeof nets)[number], functionalAmount?: Money): PostingLine => ({
+      glAccount: grIrAccount,
+      drCr: 'D',
+      money: n.net,
+      functionalAmount,
+      taxCode: n.taxCode,
+      lineText: `GR/IR ${formatScaled6(n.qty6)} @ ${poItemRef(n.poItem.lineNo)}`,
+    });
+
+    // Domestic (KRW==KRW): byte-identical to the pre-FX path (no functional override, rate NULL, no
+    // FX line). Foreign (import): relieve WRX at the GR-date functional value, translate VAT + AP at
+    // the invoice-date rate, and route the functional residue to realized FX (the clearing #13 pattern).
+    let exchangeRate: string | null = null;
+    let fxRate: string | undefined;
+    let lines: PostingLine[];
+
+    if (!isFx) {
+      lines = [
+        ...nets.map((n) => wrxLine(n)),
+        ...tax.taxLines
+          .filter((t) => !t.tax.isZero())
+          .map((t): PostingLine => ({ glAccount: t.glAccount, drCr: 'D', money: t.tax, taxCode: t.taxCode })),
+        { glAccount: reconAccount, drCr: 'C', money: tax.grandTotal, partnerId: po.vendorBpId },
+      ];
+    } else {
+      const functionalCurrency = company.currency as CurrencyCode;
+      const resolved = await this.currencies.resolveRate(currency, functionalCurrency, dto.documentDate, 'M');
+      fxRate = resolved.rate;
+      exchangeRate = resolved.rate;
+
+      // WRX relief = the WHOLE GR-booked functional value of the received quantity (full match), so GR
+      // (credit) and IV (debit) net to exactly zero in the functional currency — the FX delta is
+      // isolated outside WRX. VAT + AP translate at the invoice-date rate.
+      const businessLines: PostingLine[] = [
+        ...nets.map((n) => {
+          const recv = received.get(n.poItem.id);
+          if (!recv) {
+            throw new BadRequestException(
+              `nothing received against PO item line ${n.poItem.lineNo} to invoice`,
+            );
+          }
+          return wrxLine(n, Money.fromNumeric(recv.amount, functionalCurrency, this.registry));
         }),
-      ),
-      ...tax.taxLines
-        .filter((t) => !t.tax.isZero())
-        .map(
-          (t): PostingLine => ({ glAccount: t.glAccount, drCr: 'D', money: t.tax, taxCode: t.taxCode }),
-        ),
-      { glAccount: reconAccount, drCr: 'C', money: tax.grandTotal, partnerId: po.vendorBpId },
-    ];
+        ...tax.taxLines
+          .filter((t) => !t.tax.isZero())
+          .map(
+            (t): PostingLine => ({
+              glAccount: t.glAccount,
+              drCr: 'D',
+              money: t.tax,
+              functionalAmount: t.tax.convert(resolved.rate, functionalCurrency, this.registry),
+              taxCode: t.taxCode,
+            }),
+          ),
+        {
+          glAccount: reconAccount,
+          drCr: 'C',
+          money: tax.grandTotal,
+          functionalAmount: tax.grandTotal.convert(resolved.rate, functionalCurrency, this.registry),
+          partnerId: po.vendorBpId,
+        },
+      ];
+
+      // Realized FX residue (functional), on the short side → gain (credit) / loss (debit). Computed
+      // from the ACTUAL line functional amounts, so the entry ties out in both currencies and post()'s
+      // FX_ROUNDING auto-plug never fires (every line carries its functionalAmount override).
+      const sideFunc = (drCr: 'D' | 'C'): bigint =>
+        businessLines
+          .filter((l) => l.drCr === drCr)
+          .reduce((sum, l) => sum + (l.functionalAmount?.minorUnits ?? 0n), 0n);
+      const residue = sideFunc('D') - sideFunc('C');
+      lines = [...businessLines];
+      if (residue !== 0n) {
+        const realizedAccount = await this.accountDetermination.resolve({
+          transactionKey: residue > 0n ? REALIZED_FX_GAIN_KEY : REALIZED_FX_LOSS_KEY,
+          chartOfAccounts: company.chartOfAccounts,
+          companyCode: company.code,
+        });
+        const magnitude = residue > 0n ? residue : -residue;
+        lines.push({
+          glAccount: realizedAccount,
+          drCr: residue > 0n ? 'C' : 'D',
+          money: Money.zero(currency, this.registry),
+          functionalAmount: Money.fromMinorUnits(magnitude, functionalCurrency, this.registry),
+        });
+      }
+    }
 
     try {
       return await this.db.transaction(async (tx) => {
@@ -239,6 +343,8 @@ export class InvoiceVerificationService {
             postingDate: dto.postingDate,
             documentDate: dto.documentDate,
             currency,
+            // Applied document→functional 'M' rate for an import invoice (NULL for domestic).
+            exchangeRate,
             headerText: dto.headerText ?? null,
             createdBy: actor,
             updatedBy: actor,
@@ -271,6 +377,8 @@ export class InvoiceVerificationService {
             documentDate: dto.documentDate,
             docType: DOC_TYPE_AP_INVOICE,
             currency,
+            // Foreign import invoice: the resolved invoice-date rate (undefined ⇒ domestic KRW path).
+            fxRate,
             reference: `${DOC_FLOW_TYPE_IV}:${docNo}`,
             headerText: dto.headerText,
             lines,
