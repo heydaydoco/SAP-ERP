@@ -37,3 +37,6 @@ pnpm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 *.swp
+
+# Claude Code (local agent session state — not part of the repo)
+.claude/
