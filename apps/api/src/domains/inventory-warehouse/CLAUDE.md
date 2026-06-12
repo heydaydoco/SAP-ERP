@@ -13,12 +13,15 @@
 - `warehouse` · `batch-serial` · `stock-taking` — later
 
 ## Status
-🟧 **In progress (Phase 3, slice 1 shipped).** Moving-average (MAP) valuation + goods movements +
-inventory↔GL reconciliation (migration **0010**). Deferred: procurement-linked movements (PR/PO/GR/IV,
-GR/IR clearing, WRX), landed cost, movement **reversal** (102/202 — the doc framework's
-reversal-pair columns are deliberately absent until then), negative stock, FIFO, transfer postings,
-batch/serial, physical-inventory documents (711/712 post directly today), UI screens, OpenAPI
-registry entries (web client can't see these endpoints yet).
+🟧 **In progress (Phase 3, slice 1 shipped; slice 2 extended it).** Moving-average (MAP) valuation +
+goods movements + inventory↔GL reconciliation (migration **0010**). Slice 2 (procurement P2P) added
+the **caller-options hook** on `GoodsMovementService.post()` — `offsetKey` (default `GBB`; a
+PO-linked GR passes `WRX`) + caller doc_flow links (header / per-item `RECEIVES` edges), all inside
+the movement's own tx; the public REST path is unchanged (PO-free movements stay byte-identical).
+Deferred: PR, landed cost, movement **reversal** (102/202 — the doc framework's reversal-pair
+columns are deliberately absent until then), negative stock, FIFO, transfer postings, batch/serial,
+physical-inventory documents (711/712 post directly today), UI screens, OpenAPI registry entries
+(web client can't see these endpoints yet).
 
 > **Note:** `goods-movement` is the single source of stock changes → FI. MAP only in this slice.
 
@@ -63,9 +66,15 @@ registry entries (web client can't see these endpoints yet).
   fiscal year effectively serialize on that range row. Correct and deadlock-free (header-first
   also gives the clean idempotency replay); throughput-bounding is acceptable for this slice and
   revisited if movement volume needs it.
-- **Account determination (§4.5):** `BSX` (stock) / `GBB` (offset) keyed by `valuation_class`
-  (NEW — lives on `material_valuation`, seeded 3000 raw / 7920 finished → KR01 1300/1310 ·
-  5100/5110). No hard-coded accounts; a missing rule aborts the whole movement atomically.
+- **Account determination (§4.5):** `BSX` (stock) / offset keyed by `valuation_class`
+  (lives on `material_valuation`, seeded 3000 raw / 7920 finished → KR01 1300/1310 · 5100/5110).
+  The offset key defaults to `GBB`; a caller may pass `GoodsMovementPostOptions.offsetKey`
+  (procurement's GR passes `WRX` → GR/IR clearing). No hard-coded accounts; a missing rule aborts
+  the whole movement atomically.
+- **Caller lineage (slice 2):** `GoodsMovementPostOptions.headerDocFlowLinks` /
+  `itemDocFlowLinks[i]` write doc_flow edges from the movement (`inventory.goods_movement`) and its
+  lines (`inventory.goods_movement_item`, by input index → line_no) inside the movement tx — the
+  engine owns the item ids, so inventory stays PO-agnostic while procurement gets exact lineage.
 - **Reconciliation:** `GET /inventory-warehouse/reconciliation?companyCodeId=` returns
   Σ `stock_value` vs BSX GL balance per **functional** currency; **delta must be `0.0000` at all
   times** (the integration suite asserts it after every step). Both aggregates run in ONE
@@ -94,7 +103,8 @@ registry entries (web client can't see these endpoints yet).
 
 ## FI postings
 - `POST /inventory-warehouse/goods-movements` → journal `WE` (receipts 561/101/712:
-  **Dr BSX / Cr GBB**) or `WA` (issues 201/711: **Dr GBB / Cr BSX**), one Dr/Cr pair per item,
+  **Dr BSX / Cr GBB**) or `WA` (issues 201/711: **Dr GBB / Cr BSX**) — a PO-linked GR (service
+  call from procurement, not this endpoint) swaps the offset to **WRX** — one Dr/Cr pair per item,
   amounts in functional currency; `reference` = `inventory.goods_movement:<docNo>`; journal doc_no
   stays on the JE range (movement doc types own no JE range yet). Traceability: doc_flow edge
   `inventory.goods_movement` —`POSTS`→ `finance.journal_entry` (§4.3), same tx.

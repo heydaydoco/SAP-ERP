@@ -78,6 +78,13 @@
       "when": 1781067237832,
       "tag": "0010_gigantic_brother_voodoo",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781075887849,
+      "tag": "0011_illegal_obadiah_stane",
+      "breakpoints": true
     }
   ]
 }

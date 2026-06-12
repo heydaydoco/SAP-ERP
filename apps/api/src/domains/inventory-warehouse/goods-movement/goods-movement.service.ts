@@ -19,6 +19,7 @@ import { DbCurrencyRegistry } from '../../master-data/currency/db-currency-regis
 import {
   DOC_FLOW_TYPE as JOURNAL_DOC_FLOW_TYPE,
   JournalService,
+  type PostDocFlowLink,
 } from '../../finance-accounting/general-ledger/journal.service.js';
 import {
   averagePrice6,
@@ -41,7 +42,27 @@ export const DOC_TYPE_GOODS_ISSUE = 'WA';
 export const DOC_TYPE_GOODS_MOVEMENT = 'GM';
 /** doc_flow node type for goods movements; a POSTS edge links the movement to its journal. */
 export const DOC_FLOW_TYPE = 'inventory.goods_movement';
+/** doc_flow node type for a single movement line — the source of caller-supplied item edges (e.g.
+ *  a GR line RECEIVES a PO line). Item-level lineage stays in the generic doc_flow table (§4.3). */
+export const DOC_FLOW_ITEM_TYPE = 'inventory.goods_movement_item';
 export const DOC_FLOW_REL_POSTS = 'POSTS';
+
+/**
+ * Optional procurement-aware extensions a caller (procurement's goods-receipt orchestrator) attaches
+ * to a movement, all committed in the movement's own transaction (§5.2 — they exist iff the movement
+ * does). The public REST path passes none, so a PO-free direct movement is byte-identical to before:
+ *  - `offsetKey` swaps the receipt/issue offset transaction key (default `GBB`). A PO-linked GR
+ *    passes `WRX` so the credit hits GR/IR clearing instead of the consumption/equity offset.
+ *  - `headerDocFlowLinks` add edges from the movement document (e.g. GR → purchase_order, RECEIVES).
+ *  - `itemDocFlowLinks[i]` adds an edge from the created `goods_movement_item` of `dto.items[i]`
+ *    (e.g. GR line → purchase_order_item, RECEIVES) — null skips that line. The movement engine owns
+ *    the item ids, so it (not the caller) writes these in-tx, keeping inventory PO-agnostic.
+ */
+export interface GoodsMovementPostOptions {
+  offsetKey?: string;
+  headerDocFlowLinks?: readonly PostDocFlowLink[];
+  itemDocFlowLinks?: readonly (PostDocFlowLink | null)[];
+}
 
 /** Number-range object — per-fiscal-year scope, seeded as ('inventory.goods_movement', '2026', 'GM-2026-'). */
 const NUMBER_OBJECT = 'inventory.goods_movement';
@@ -140,8 +161,13 @@ export class GoodsMovementService {
     private readonly registry: DbCurrencyRegistry,
   ) {}
 
-  async post(dto: CreateGoodsMovementDto, actor = 'system'): Promise<PostedGoodsMovement> {
+  async post(
+    dto: CreateGoodsMovementDto,
+    actor = 'system',
+    opts?: GoodsMovementPostOptions,
+  ): Promise<PostedGoodsMovement> {
     const postingKey = dto.postingKey ?? `gm:${randomUUID()}`;
+    const offsetKey = opts?.offsetKey ?? GBB_KEY;
 
     // Idempotency (§5.2): a replay returns the existing document's live state.
     const existing = await this.findByPostingKey(dto.plantId, postingKey);
@@ -268,7 +294,7 @@ export class GoodsMovementService {
 
         // 4) Value each item in line order against the RUNNING state (duplicate materials in one
         //    document compound correctly), apply the §3.1 exact-Money math from map.ts.
-        const accounts = new Map<string, { bsx: string; gbb: string }>();
+        const accounts = new Map<string, { bsx: string; offset: string }>();
         const lines: PostingLine[] = [];
         const itemRows: (typeof schema.goodsMovementItem.$inferInsert)[] = [];
         for (const [i, item] of dto.items.entries()) {
@@ -347,13 +373,19 @@ export class GoodsMovementService {
           // Journal lines: receipt Dr BSX / Cr GBB · issue Dr GBB / Cr BSX — amounts ARE the
           // stock_value deltas, so GL and valuation cannot drift. Zero-value items post nothing.
           if (!amount.isZero()) {
-            const acct = await this.resolveAccounts(accounts, state.valuationClass, company, tx);
+            const acct = await this.resolveAccounts(
+              accounts,
+              state.valuationClass,
+              offsetKey,
+              company,
+              tx,
+            );
             const lineText = `${movementType} ${code} x ${formatScaled6(qty6)}`;
             const stockSide = isIssue ? ('C' as const) : ('D' as const);
             const offsetSide = isIssue ? ('D' as const) : ('C' as const);
             lines.push(
               { glAccount: acct.bsx, drCr: stockSide, money: amount, lineText },
-              { glAccount: acct.gbb, drCr: offsetSide, money: amount, lineText },
+              { glAccount: acct.offset, drCr: offsetSide, money: amount, lineText },
             );
           }
         }
@@ -388,7 +420,31 @@ export class GoodsMovementService {
               ),
             );
         }
-        await tx.insert(schema.goodsMovementItem).values(itemRows);
+        const insertedItems = await tx
+          .insert(schema.goodsMovementItem)
+          .values(itemRows)
+          .returning({ id: schema.goodsMovementItem.id, lineNo: schema.goodsMovementItem.lineNo });
+
+        // 5b) Caller-supplied lineage (e.g. a PO-linked GR: header RECEIVES the PO, each line
+        //     RECEIVES its PO item), written in THIS tx so the edges exist iff the movement does.
+        for (const link of opts?.headerDocFlowLinks ?? []) {
+          await this.docFlow.link(
+            { sourceType: DOC_FLOW_TYPE, sourceId: header.id, ...link },
+            tx,
+          );
+        }
+        if (opts?.itemDocFlowLinks) {
+          const idByLineNo = new Map(insertedItems.map((r) => [r.lineNo, r.id]));
+          for (const [i, link] of opts.itemDocFlowLinks.entries()) {
+            if (!link) continue;
+            const itemId = idByLineNo.get(i + 1);
+            if (!itemId) throw new Error('goods_movement_item id missing for line edge');
+            await this.docFlow.link(
+              { sourceType: DOC_FLOW_ITEM_TYPE, sourceId: itemId, ...link },
+              tx,
+            );
+          }
+        }
 
         // 6) The FI journal — through the ONE writer (§3.2), joining THIS tx (§5.2): the journal
         //    commits iff the stock update does. A zero-value movement has no GL impact (no lines).
@@ -546,16 +602,18 @@ export class GoodsMovementService {
   }
 
   /**
-   * Resolve + memoize the BSX/GBB pair for a valuation class (§4.5 — config, never hard-coded).
-   * Reads ride the movement tx (sequentially — a tx connection runs one query at a time), so a
-   * full pool of concurrent movements cannot starve the lookup.
+   * Resolve + memoize the stock (BSX) + offset pair for a valuation class (§4.5 — config, never
+   * hard-coded; the offset is GBB by default, WRX for a PO-linked GR). Reads ride the movement tx
+   * (sequentially — a tx connection runs one query at a time), so a full pool of concurrent
+   * movements cannot starve the lookup.
    */
   private async resolveAccounts(
-    cache: Map<string, { bsx: string; gbb: string }>,
+    cache: Map<string, { bsx: string; offset: string }>,
     valuationClass: string,
+    offsetKey: string,
     company: { companyCode: string; chartOfAccounts: string },
     tx: Transaction,
-  ): Promise<{ bsx: string; gbb: string }> {
+  ): Promise<{ bsx: string; offset: string }> {
     const cached = cache.get(valuationClass);
     if (cached) return cached;
     const key = {
@@ -563,9 +621,14 @@ export class GoodsMovementService {
       valuationClass,
       companyCode: company.companyCode,
     };
+    // Stock account (BSX) + the offset: GBB for direct movements, WRX (GR/IR clearing) for a
+    // PO-linked GR — the caller picks via offsetKey (§4.5, never hard-coded).
     const bsx = await this.accountDetermination.resolve({ transactionKey: BSX_KEY, ...key }, tx);
-    const gbb = await this.accountDetermination.resolve({ transactionKey: GBB_KEY, ...key }, tx);
-    const pair = { bsx, gbb };
+    const offset = await this.accountDetermination.resolve(
+      { transactionKey: offsetKey, ...key },
+      tx,
+    );
+    const pair = { bsx, offset };
     cache.set(valuationClass, pair);
     return pair;
   }
