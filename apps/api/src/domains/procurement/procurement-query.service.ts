@@ -12,11 +12,21 @@ import {
 /** Aggregated quantity + value against a PO item (scale-6 qty bigint; amount NUMERIC(18,4) string). */
 export interface PoItemAggregate {
   qty6: bigint;
-  /** Σ amount (the GR/IR value moved): WRX credited on receipt / WRX debited on invoice. */
+  /**
+   * Σ amount in the row's own currency (NUMERIC(18,4)). For a goods receipt this is the FUNCTIONAL
+   * (KRW) value the engine posted to BSX/WRX; for an invoice it is the document-currency invoiced net.
+   */
   amount: string;
+  /**
+   * Σ of the import-GR FOREIGN line value (document currency) — set only on the received aggregate of
+   * a foreign PO (NULL/absent for a domestic GR and for the invoiced aggregate). The GR/IR open report
+   * uses it so a foreign PO's open value is reported in the PO (document) currency, against the
+   * document-currency invoiced net — both sides in the same currency.
+   */
+  documentAmount?: string | null;
 }
 
-const ZERO_AGG: PoItemAggregate = { qty6: 0n, amount: '0.0000' };
+const ZERO_AGG: PoItemAggregate = { qty6: 0n, amount: '0.0000', documentAmount: null };
 
 /**
  * Procurement derivation hub (D4 — "received"/"invoiced" are DERIVED, never stored flags). Received
@@ -43,6 +53,9 @@ export class ProcurementQueryService {
         poItemId: schema.docFlow.targetId,
         qty: sql<string>`coalesce(sum(${schema.goodsMovementItem.qty}), 0)`,
         amount: sql<string>`coalesce(sum(${schema.goodsMovementItem.amount}), 0)`,
+        // Raw SUM (no coalesce): NULL when every line is domestic, the Σ foreign value otherwise — so
+        // a foreign PO item reports its received value in the document currency, not 0.
+        documentAmount: sql<string | null>`sum(${schema.goodsMovementItem.documentAmount})`,
       })
       .from(schema.docFlow)
       .innerJoin(
@@ -59,7 +72,11 @@ export class ProcurementQueryService {
       )
       .groupBy(schema.docFlow.targetId);
     for (const r of rows) {
-      result.set(r.poItemId, { qty6: parseScaled6(r.qty), amount: toNumeric4(r.amount) });
+      result.set(r.poItemId, {
+        qty6: parseScaled6(r.qty),
+        amount: toNumeric4(r.amount),
+        documentAmount: r.documentAmount == null ? null : toNumeric4(r.documentAmount),
+      });
     }
     return result;
   }
@@ -118,8 +135,13 @@ export class ProcurementQueryService {
         receivedQty: scaled6(rec.qty6),
         invoicedQty: scaled6(inv.qty6),
         openQty: scaled6(rec.qty6 - inv.qty6),
-        /** Value still on GR/IR for this line (received value − invoiced value). */
-        grIrOpenAmount: subNumeric4(rec.amount, inv.amount),
+        /**
+         * Value still on GR/IR for this line, in the PO (document) currency — received value −
+         * invoiced value. A foreign PO compares the received foreign value (`documentAmount`) against
+         * the document-currency invoiced net; a domestic PO falls back to the functional `amount`
+         * (KRW==document). The functional WRX GL itself nets via realized FX (the journal level).
+         */
+        grIrOpenAmount: subNumeric4(rec.documentAmount ?? rec.amount, inv.amount),
       };
     });
 

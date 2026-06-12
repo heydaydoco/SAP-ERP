@@ -28,12 +28,20 @@ export class PurchaseOrderService {
 
   async create(dto: CreatePurchaseOrderDto, actor = 'system') {
     const company = await this.getCompany(dto.companyCodeId);
-    // Domestic slice: order currency == functional currency (GR posts stock in functional currency).
+    // Import POs may be FOREIGN-currency: the GR translates the price to the functional currency (KRW)
+    // at the GR-date 'M' rate and the IV books the rate difference as realized FX. A foreign currency
+    // must exist in the currency master (the registry needs its minor unit; the rate is resolved at
+    // GR/IV time) — validate here so a typo fails at PO creation, not at the first receipt.
     if (dto.currency !== company.currency) {
-      throw new BadRequestException(
-        `purchase order currency ${dto.currency} must equal the company functional currency ` +
-          `${company.currency} (foreign-currency import POs are a later slice)`,
-      );
+      const [cur] = await this.db
+        .select({ code: schema.currency.code })
+        .from(schema.currency)
+        .where(eq(schema.currency.code, dto.currency));
+      if (!cur) {
+        throw new BadRequestException(
+          `purchase order currency ${dto.currency} is not defined in the currency master`,
+        );
+      }
     }
 
     const bp = await this.partners.getBp(dto.vendorBpId);

@@ -35,6 +35,16 @@ export const REL_POSTS = 'POSTS';
  */
 export const WRX_KEY = 'WRX';
 
+/**
+ * Realized FX gain/loss keys for a FOREIGN (import) IV — REUSED from the clearing slice (#13), so no
+ * new account-determination rows. WRX is relieved at the GR-date functional value; the difference vs
+ * the invoice-date rate posts to these economic P&L accounts (외환차익/외환차손), exactly the
+ * clearing residue pattern. Their GL accounts are `currency = null` (the gain/loss line is 0 in the
+ * foreign document currency), already seeded as 9810/9820.
+ */
+export const REALIZED_FX_GAIN_KEY = 'REALIZED_FX_GAIN';
+export const REALIZED_FX_LOSS_KEY = 'REALIZED_FX_LOSS';
+
 /** Number-range objects (SAP Number Range). PO is global-scoped; IV is per-fiscal-year. */
 export const NUMBER_OBJECT_PO = 'procurement.purchase_order';
 export const NUMBER_OBJECT_IV = 'procurement.invoice_verification';

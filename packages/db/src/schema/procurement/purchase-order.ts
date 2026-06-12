@@ -25,9 +25,9 @@ import { companyCode, plant, purchasingOrg, storageLocation } from '../platform/
  * Lifecycle is intentionally thin in this slice: ORDERED → CLOSED. Receipt/invoice **progress is
  * DERIVED**, never a stored flag (D4): received qty = the GR `RECEIVES` doc_flow edges into a PO
  * item; invoiced qty = the linked invoice_verification items. There is no `received`/`invoiced`
- * counter to drift. Foreign-currency (import) POs, landed cost, and PR approval are out of scope —
- * this slice is domestic, functional-currency procurement (the GR valuation currency MUST equal the
- * company functional currency).
+ * counter to drift. A PO may be FOREIGN-currency (import): the GR translates the foreign price to the
+ * functional currency (KRW) at the GR-date rate and the IV books the GR↔invoice rate difference as
+ * realized FX. Landed cost (관세·운임 배부) and PR approval are still out of scope.
  */
 
 export const purchaseOrder = pgTable(
@@ -46,7 +46,7 @@ export const purchaseOrder = pgTable(
       .references(() => businessPartner.id),
     /** Optional procuring organization (구매조직). */
     purchasingOrgId: uuid('purchasing_org_id').references(() => purchasingOrg.id),
-    /** Order currency — equals the company functional currency in this slice (service-enforced). */
+    /** Order currency — the company functional currency, or a foreign import currency (in the master). */
     currency: currencyCol('currency').notNull(),
     /** When the order was placed (business-event date). */
     orderDate: date('order_date', { mode: 'string' }).notNull(),

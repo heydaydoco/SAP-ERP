@@ -27,7 +27,10 @@ import { purchaseOrder, purchaseOrderItem } from './purchase-order';
  * accrual, **Dr input VAT** per tax code, **Cr AP recon (+vendor partner)** the gross. GR credited
  * WRX at the PO price; IV debits WRX at the invoiced net (Option A), so a price-matched invoice
  * clears GR/IR to zero and any in-tolerance price variance leaves a small WRX residue (PRD price-
- * difference posting + stock revaluation are a follow-up). Posted-only + idempotent on `posting_key`.
+ * difference posting + stock revaluation are a follow-up). A FOREIGN (import) invoice instead relieves
+ * WRX at the GR-date functional value and books the GR↔invoice rate difference to realized FX
+ * (9810/9820), the document currency being the invoice currency (`exchange_rate` stamps the applied
+ * 'M' rate). Posted-only + idempotent on `posting_key`.
  */
 
 export const invoiceVerification = pgTable(
@@ -54,6 +57,12 @@ export const invoiceVerification = pgTable(
     postingDate: date('posting_date', { mode: 'string' }).notNull(),
     documentDate: date('document_date', { mode: 'string' }).notNull(),
     currency: currencyCol('currency').notNull(),
+    /**
+     * Applied document→functional 'M' rate for a FOREIGN (import) invoice — the audit record of the
+     * rate the WRX relief and realized FX used (resolved on the document date, SAP WWERT/BLDAT).
+     * NULL for a domestic functional-currency IV (rate is the 1.0 identity, never stored).
+     */
+    exchangeRate: numeric('exchange_rate', { precision: 18, scale: 6 }),
     headerText: varchar('header_text', { length: 256 }),
   },
   (t) => [

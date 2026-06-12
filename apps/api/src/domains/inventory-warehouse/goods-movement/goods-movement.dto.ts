@@ -1,4 +1,4 @@
-import { paginationQuerySchema } from '@erp/shared';
+import { currencyCodeSchema, paginationQuerySchema } from '@erp/shared';
 import { z } from 'zod';
 
 /** Goods-movement request DTOs (Zod). */
@@ -36,12 +36,33 @@ const unitPriceSchema = z
   .string()
   .regex(/^\d{1,12}(\.\d{1,6})?$/, 'unitPrice must be a non-negative decimal, max 6 decimals');
 
+/** A scale-6 fx rate (`NUMERIC(18,6)`), positive — the import-GR trade-trace exchange rate. */
+const exchangeRateSchema = z
+  .string()
+  .regex(/^\d{1,12}(\.\d{1,6})?$/, 'exchangeRate must be a non-negative decimal, max 6 decimals')
+  .refine((v) => Number(v) > 0, 'exchangeRate must be positive');
+
+/** A `NUMERIC(18,4)` non-negative money string — the import-GR foreign line value. */
+const documentAmountSchema = z
+  .string()
+  .regex(/^\d{1,14}(\.\d{1,4})?$/, 'documentAmount must be a non-negative decimal, max 4 decimals');
+
 export const goodsMovementItemSchema = z.object({
   materialId: z.string().uuid(),
   storageLocationId: z.string().uuid(),
   qty: qtySchema,
-  /** REQUIRED on priced receipts (561/101); forbidden otherwise (the MAP prices those). */
+  /** REQUIRED on priced receipts (561/101); forbidden otherwise (the MAP prices those). For an
+   *  import GR the caller passes the price ALREADY TRANSLATED to the functional currency (KRW). */
   unitPrice: unitPriceSchema.optional(),
+  /**
+   * Import-GR trade trace (procurement's GR orchestrator sets all three for a foreign PO; a domestic
+   * or PO-free direct movement omits them → stored NULL, byte-identical). They are PASSTHROUGH audit
+   * fields: the engine persists them on `goods_movement_item` but never values from them — the
+   * functional `amount` it posts comes from the (already-translated) `unitPrice` as before.
+   */
+  documentCurrency: currencyCodeSchema.optional(),
+  exchangeRate: exchangeRateSchema.optional(),
+  documentAmount: documentAmountSchema.optional(),
 });
 
 export const createGoodsMovementSchema = z
