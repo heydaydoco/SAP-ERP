@@ -18,6 +18,7 @@ import { NumberingService } from '../../platform/numbering/numbering.service.js'
 import { DbCurrencyRegistry } from '../../master-data/currency/db-currency-registry.js';
 import {
   DOC_FLOW_TYPE as JOURNAL_DOC_FLOW_TYPE,
+  DOC_TYPE_AP_INVOICE,
   JournalService,
   type PostDocFlowLink,
 } from '../../finance-accounting/general-ledger/journal.service.js';
@@ -107,6 +108,80 @@ export interface PostedGoodsMovement {
   status: string;
   /** NULL only for a zero-value movement (no GL impact — e.g. a receipt priced at 0). */
   journalId: string | null;
+}
+
+/**
+ * One PO line's incidental-cost share to capitalize via the value-only revaluation (landed cost).
+ * `shareDoc`/`shareFunctional` are the SAME amount in the document and functional currencies
+ * (equal when domestic). The engine splits each by on-hand coverage: the part still on stock
+ * capitalizes onto `stock_value` (Dr BSX), the already-issued part is expensed (Dr PRD).
+ */
+export interface LandedCostAllocation {
+  materialId: string;
+  plantId: string;
+  purchaseOrderItemId: string;
+  lineNo: number;
+  /** Received quantity of this line — the denominator of the on-hand coverage ratio. */
+  receivedQty6: bigint;
+  /** Allocation basis (received functional value), passed through to the landed_cost_item record. */
+  receivedFunctionalValue: Money;
+  shareDoc: Money;
+  shareFunctional: Money;
+}
+
+/** Inputs to a value-only revaluation (landed cost) — see {@link GoodsMovementService.revaluateValue}. */
+export interface RevaluateValueInput {
+  /** The owning landed_cost document — its id keys the journal (`lc:<id>`) + the POSTS doc_flow edge. */
+  landedCostId: string;
+  docNo: string;
+  /** doc_flow node type of the owning document (e.g. `procurement.landed_cost`) — the POSTS source. */
+  sourceType: string;
+  company: { companyCodeId: string; companyCode: string; chartOfAccounts: string; currency: string };
+  postingDate: string;
+  documentDate: string;
+  /** Cost-invoice (document) currency. */
+  currency: CurrencyCode;
+  /** Resolved document→functional 'M' rate for a FOREIGN cost invoice; undefined ⇒ domestic. */
+  fxRate?: string;
+  allocations: readonly LandedCostAllocation[];
+  /** Caller-built offset lines: Cr AP recon (+partner) [+ Dr import VAT 1350]. */
+  offsetLines: readonly PostingLine[];
+  /** Resolved accounts (caller resolves via account_determination / tax code — never hard-coded). */
+  prdAccount: string;
+  realizedFxGainAccount: string;
+  realizedFxLossAccount: string;
+  headerText?: string;
+}
+
+/** Per-PO-line capitalization breakdown — the caller persists it as landed_cost_item rows. */
+export interface LandedCostBreakdownLine {
+  purchaseOrderItemId: string;
+  lineNo: number;
+  materialId: string;
+  plantId: string;
+  receivedFunctionalValue: string;
+  /** = coveredShare + prdAmount (functional). */
+  capitalizedShare: string;
+  coveredShare: string;
+  prdAmount: string;
+}
+
+export interface RevaluatedLandedCost {
+  journalId: string;
+  breakdown: LandedCostBreakdownLine[];
+}
+
+/** In-tx running revaluation state per (material, plant): the locked snapshot + accrued add. */
+interface RevaluationState {
+  rowId: string;
+  valuationClass: string;
+  /** Valuation quantity — UNCHANGED by a value-only revaluation (read for the MAP recompute). */
+  qty6: bigint;
+  value: Money;
+  /** On-hand quantity still available to absorb coverage, decremented greedily across lines. */
+  remaining: bigint;
+  /** Σ covered functional amount to add to stock_value for this row. */
+  addFunctional: Money;
 }
 
 /** In-tx running valuation state per material (the SELECT FOR UPDATE snapshot + applied items). */
@@ -506,6 +581,227 @@ export class GoodsMovementService {
       }
       throw e;
     }
+  }
+
+  /**
+   * Value-only revaluation (landed cost / SAP MR21 subsequent-debit essence) — the SECOND way value
+   * enters `material_valuation`, alongside `post()`. It adds incidental import cost to the stock
+   * value of received goods WITHOUT a goods movement: quantity is untouched, so there is no
+   * goods_movement row and no movement_type/qty CHECK to widen. Runs in the CALLER's transaction
+   * (`tx`) so the landed_cost document + its journal commit atomically with the valuation write.
+   *
+   * Per PO line, the cost share is split by how much of the received quantity is still ON HAND
+   * (greedy `min(received, remaining)` per material×plant, under the SELECT FOR UPDATE lock): the
+   * covered part capitalizes (Dr BSX, raising stock_value + re-deriving MAP via averagePrice6 on the
+   * UNCHANGED quantity), the already-issued part is expensed (Dr PRD 재고원가차이) — never written
+   * onto a zero-quantity row (the empty_zero invariant). The journal — Dr BSX covered / Dr PRD
+   * uncovered + the caller's Cr AP recon [+ Dr import VAT] (+ realized-FX residue for a foreign cost
+   * invoice) — posts through the ONE GL writer with a `lc:<id>` key, and a POSTS edge makes it
+   * subledger-owned (FI reverse refused). Because the Dr BSX amount IS the stock_value delta,
+   * Σ stock_value == BSX still holds (the /reconciliation invariant); import VAT hits 1350, never BSX.
+   */
+  async revaluateValue(
+    input: RevaluateValueInput,
+    actor: string,
+    tx: Transaction,
+  ): Promise<RevaluatedLandedCost> {
+    const { company, allocations } = input;
+    const currency = input.currency;
+    const functionalCurrency = company.currency as CurrencyCode;
+    const isFx = input.fxRate !== undefined;
+    const zeroDoc = Money.zero(currency, this.registry);
+    const stateKey = (materialId: string, plantId: string): string => `${materialId}:${plantId}`;
+
+    // 1) Lock every touched valuation row in SORTED (material, plant) order — same deadlock-free
+    //    discipline as post(), so concurrent movements/revaluations cannot deadlock on overlap.
+    const states = new Map<string, RevaluationState>();
+    const pairs = [...new Set(allocations.map((a) => stateKey(a.materialId, a.plantId)))].sort();
+    for (const pair of pairs) {
+      const [materialId, plantId] = pair.split(':') as [string, string];
+      const [row] = await tx
+        .select()
+        .from(schema.materialValuation)
+        .where(
+          and(
+            eq(schema.materialValuation.materialId, materialId),
+            eq(schema.materialValuation.plantId, plantId),
+          ),
+        )
+        .for('update');
+      if (!row) {
+        throw new BadRequestException(
+          `no material valuation (accounting view) for material ${materialId} at plant ${plantId} ` +
+            `— ensure it via /inventory-warehouse/material-valuations first`,
+        );
+      }
+      if (row.currency !== functionalCurrency) {
+        throw new ConflictException(
+          `material valuation currency ${row.currency} differs from the company's functional ` +
+            `currency ${functionalCurrency}`,
+        );
+      }
+      const qty6 = parseScaled6(row.valuationQty);
+      states.set(pair, {
+        rowId: row.id,
+        valuationClass: row.valuationClass,
+        qty6,
+        value: Money.fromNumeric(row.stockValue, functionalCurrency, this.registry),
+        remaining: qty6,
+        addFunctional: Money.zero(functionalCurrency, this.registry),
+      });
+    }
+
+    // 2) Split each line by on-hand coverage and build the capitalization journal lines.
+    const bsxByClass = new Map<string, string>();
+    const capLines: PostingLine[] = [];
+    const breakdown: LandedCostBreakdownLine[] = [];
+    for (const a of allocations) {
+      const state = states.get(stateKey(a.materialId, a.plantId));
+      if (!state) throw new Error('valuation state missing'); // unreachable
+
+      // Covered quantity = the on-hand still available to this line; the rest was already issued.
+      const coveredQty6 =
+        a.receivedQty6 <= 0n
+          ? 0n
+          : state.remaining < a.receivedQty6
+            ? state.remaining
+            : a.receivedQty6;
+      state.remaining -= coveredQty6;
+
+      // Exact proportional value share (same math as an issue at average): covered = share ×
+      // coveredQty / receivedQty, rounded half-away; uncovered = share − covered (conserves the share).
+      const coveredFunctional =
+        coveredQty6 === 0n
+          ? Money.zero(functionalCurrency, this.registry)
+          : valueAtAverage(coveredQty6, a.receivedQty6, a.shareFunctional);
+      const uncoveredFunctional = a.shareFunctional.subtract(coveredFunctional);
+      const coveredDoc =
+        coveredQty6 === 0n ? zeroDoc : valueAtAverage(coveredQty6, a.receivedQty6, a.shareDoc);
+      const uncoveredDoc = a.shareDoc.subtract(coveredDoc);
+
+      state.addFunctional = state.addFunctional.add(coveredFunctional);
+
+      const lineText = `landed cost @ PO#${a.lineNo}`;
+      if (!coveredDoc.isZero()) {
+        let bsx = bsxByClass.get(state.valuationClass);
+        if (!bsx) {
+          bsx = await this.accountDetermination.resolve(
+            {
+              transactionKey: BSX_KEY,
+              chartOfAccounts: company.chartOfAccounts,
+              valuationClass: state.valuationClass,
+              companyCode: company.companyCode,
+            },
+            tx,
+          );
+          bsxByClass.set(state.valuationClass, bsx);
+        }
+        capLines.push({
+          glAccount: bsx,
+          drCr: 'D',
+          money: coveredDoc,
+          functionalAmount: isFx ? coveredFunctional : undefined,
+          lineText,
+        });
+      }
+      if (!uncoveredDoc.isZero()) {
+        // The already-issued share cannot be capitalized (empty_zero / it left at the old MAP) — it
+        // is a price/cost difference (재고원가차이), expensed, never onto stock_value.
+        capLines.push({
+          glAccount: input.prdAccount,
+          drCr: 'D',
+          money: uncoveredDoc,
+          functionalAmount: isFx ? uncoveredFunctional : undefined,
+          lineText: `landed cost cost-diff @ PO#${a.lineNo}`,
+        });
+      }
+
+      breakdown.push({
+        purchaseOrderItemId: a.purchaseOrderItemId,
+        lineNo: a.lineNo,
+        materialId: a.materialId,
+        plantId: a.plantId,
+        receivedFunctionalValue: a.receivedFunctionalValue.toNumeric(),
+        capitalizedShare: a.shareFunctional.toNumeric(),
+        coveredShare: coveredFunctional.toNumeric(),
+        prdAmount: uncoveredFunctional.toNumeric(),
+      });
+    }
+
+    // 3) Absolute write of the new stock value + re-derived MAP, under the lock — ONLY for rows that
+    //    actually gained value (qty is UNCHANGED). A row with no coverage (all issued) is skipped, so
+    //    value is never added to a zero-qty row (the empty_zero CHECK).
+    for (const state of states.values()) {
+      if (state.addFunctional.isZero()) continue;
+      if (state.qty6 === 0n) {
+        // Unreachable: coverage is 0 when remaining (= qty6) is 0, so addFunctional would be 0.
+        throw new ConflictException('cannot capitalize landed cost onto zero on-hand stock');
+      }
+      const newValue = state.value.add(state.addFunctional);
+      assertFitsValue(state.addFunctional, state.valuationClass);
+      assertFitsValue(newValue, state.valuationClass);
+      await tx
+        .update(schema.materialValuation)
+        .set({
+          stockValue: newValue.toNumeric(),
+          movingAvgPrice: formatScaled6(averagePrice6(state.qty6, newValue)),
+          lastMovementDate: input.postingDate,
+          updatedAt: new Date(),
+          updatedBy: actor,
+        })
+        .where(eq(schema.materialValuation.id, state.rowId));
+    }
+
+    // 4) The balanced journal: capitalization debits + the caller's AP/VAT offset. For a foreign cost
+    //    invoice every line carries its functional amount; the per-line translation residue posts to
+    //    realized FX (9810/9820) so the entry ties out in BOTH currencies and FX_ROUNDING never fires.
+    const lines: PostingLine[] = [...capLines, ...input.offsetLines];
+    if (isFx) {
+      const sideFunc = (drCr: 'D' | 'C'): bigint =>
+        lines
+          .filter((l) => l.drCr === drCr)
+          .reduce((sum, l) => sum + (l.functionalAmount?.minorUnits ?? 0n), 0n);
+      const residue = sideFunc('D') - sideFunc('C');
+      if (residue !== 0n) {
+        const magnitude = residue > 0n ? residue : -residue;
+        lines.push({
+          glAccount: residue > 0n ? input.realizedFxGainAccount : input.realizedFxLossAccount,
+          drCr: residue > 0n ? 'C' : 'D',
+          money: Money.zero(currency, this.registry),
+          functionalAmount: Money.fromMinorUnits(magnitude, functionalCurrency, this.registry),
+        });
+      }
+    }
+
+    const posted = await this.journals.post(
+      {
+        postingKey: `lc:${input.landedCostId}`,
+        companyCodeId: company.companyCodeId,
+        postingDate: input.postingDate,
+        documentDate: input.documentDate,
+        docType: DOC_TYPE_AP_INVOICE,
+        currency,
+        fxRate: input.fxRate,
+        reference: `${input.sourceType}:${input.docNo}`,
+        headerText: input.headerText,
+        lines,
+      },
+      actor,
+      { tx },
+    );
+    // §4.3 traceability + reversal fence: the landed_cost POSTS its journal (subledger-owned).
+    await this.docFlow.link(
+      {
+        sourceType: input.sourceType,
+        sourceId: input.landedCostId,
+        targetType: JOURNAL_DOC_FLOW_TYPE,
+        targetId: posted.journalId,
+        relType: DOC_FLOW_REL_POSTS,
+      },
+      tx,
+    );
+
+    return { journalId: posted.journalId, breakdown };
   }
 
   /** Header + items (line order), or 404. `journalId` from the POSTS doc_flow edge. */

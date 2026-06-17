@@ -109,6 +109,13 @@ async function seed(): Promise<void> {
       prefix: 'IV-',
       padding: 6,
     });
+    // Landed-cost (수입 부대비용 재고원가 배부 + 수입부가세) documents own a global-scoped range; the AP
+    // open item they raise draws the finance.ap_invoice KR range (docType KR).
+    await numbering.defineRange({
+      object: 'procurement.landed_cost',
+      prefix: 'LC-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -164,6 +171,10 @@ async function seed(): Promise<void> {
       // Procurement slice (§4.5): WRX = GR/IR clearing (입고미착). One account (wildcard valuation
       // class) so a GR credit and the matching IV debit hit the SAME account → the pair self-clears.
       { transactionKey: 'WRX', glAccount: '2110' }, // 입고미착 (GR/IR clearing)
+      // Landed-cost slice (§4.5): PRD = 재고원가차이. Landed cost arriving after stock was issued
+      // capitalizes only the on-hand share onto BSX; the already-issued (uncovered) share is expensed
+      // here. The capitalized share itself reuses the BSX determination above (no new stock account).
+      { transactionKey: 'PRD', glAccount: '5900' }, // 재고원가차이 (uncovered landed cost / price diff)
     ]) {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -227,6 +238,10 @@ async function seed(): Promise<void> {
       // accounts — a GR credits it at PO price, the IV debits it; matched on aligned splits it nets
       // to zero (asymmetric partials on a fractional price leave rounding dust — see procurement).
       { accountNumber: '2110', name: '입고미착', accountType: 'LIABILITY' as const },
+      // Landed-cost slice: 재고원가차이 (PRD) — the uncovered landed-cost share (stock already issued)
+      // is expensed here. currency null (omitted) like the other clearing/diff accounts, so a foreign
+      // cost invoice's document-currency PRD line is not rejected.
+      { accountNumber: '5900', name: '재고원가차이', accountType: 'EXPENSE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',
@@ -245,6 +260,16 @@ async function seed(): Promise<void> {
       {
         code: 'A10',
         name: '매입 부가세 10%',
+        kind: 'INPUT' as const,
+        ratePercent: '10',
+        glAccount: '1350',
+      },
+      // Import VAT (수입부가세) — customs-paid on the 수입세금계산서; the amount is supplied directly
+      // (base = CIF + 관세), NOT derived from net × rate, but the code carries the 부가세대급금 GL +
+      // the 10% classification for 매입세액공제 reporting.
+      {
+        code: 'I10',
+        name: '수입 부가세 (수입세금계산서)',
         kind: 'INPUT' as const,
         ratePercent: '10',
         glAccount: '1350',
@@ -325,8 +350,8 @@ async function seed(): Promise<void> {
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
         `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
-        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX) + ` +
-        `master data (5 currencies / 4 fx rates / 12 GL accounts / 2 tax codes / cost center 1000 / ` +
+        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD) + ` +
+        `master data (5 currencies / 4 fx rates / 13 GL accounts / 3 tax codes / cost center 1000 / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000 / ` +
         `2 material valuations at plant 1010: FG-1000=7920 + RM-2000=3000)`,
     );

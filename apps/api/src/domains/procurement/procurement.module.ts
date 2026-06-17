@@ -12,6 +12,8 @@ import { GoodsReceiptController } from './goods-receipt/goods-receipt.controller
 import { GoodsReceiptService } from './goods-receipt/goods-receipt.service.js';
 import { InvoiceVerificationController } from './invoice-verification/invoice-verification.controller.js';
 import { InvoiceVerificationService } from './invoice-verification/invoice-verification.service.js';
+import { LandedCostController } from './landed-cost/landed-cost.controller.js';
+import { LandedCostService } from './landed-cost/landed-cost.service.js';
 
 /**
  * Procurement domain module (Phase 3 slice 2: P2P PO→GR→IV + GR/IR clearing). The goods receipt
@@ -34,17 +36,20 @@ import { InvoiceVerificationService } from './invoice-verification/invoice-verif
     PurchaseOrderService,
     GoodsReceiptService,
     InvoiceVerificationService,
+    LandedCostService,
   ],
   controllers: [
     PurchaseOrderController,
     GoodsReceiptController,
     InvoiceVerificationController,
+    LandedCostController,
   ],
   exports: [
     ProcurementQueryService,
     PurchaseOrderService,
     GoodsReceiptService,
     InvoiceVerificationService,
+    LandedCostService,
   ],
 })
 export class ProcurementModule {}

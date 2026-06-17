@@ -22,7 +22,12 @@ Slice 3 (import procurement) added PASSTHROUGH import trade-trace columns on `go
 (`document_currency` / `exchange_rate` / `document_amount`, migration **0012**): the engine persists
 them but still values stock ONLY in the functional currency — a foreign GR's KRW is pre-translated by
 the procurement caller (Option P), so the engine and the `material_valuation` invariant are untouched.
-Deferred: PR, landed cost, movement **reversal** (102/202 — the doc framework's reversal-pair
+Slice 4 (landed cost) added a **value-only revaluation sibling** `GoodsMovementService.revaluateValue()`
+— the SECOND way value enters `material_valuation`, alongside `post()`: it adds incidental import cost
+to `stock_value` with the quantity UNCHANGED (no goods_movement row, no movement_type/qty CHECK change —
+migration 0013 only adds procurement's landed_cost tables, nothing here). The engine stays the single
+writer of valuation → FI.
+Deferred: PR, movement **reversal** (102/202 — the doc framework's reversal-pair
 columns are deliberately absent until then), negative stock, FIFO, transfer postings, batch/serial,
 physical-inventory documents (711/712 post directly today), UI screens, OpenAPI registry entries
 (web client can't see these endpoints yet).
@@ -34,6 +39,15 @@ physical-inventory documents (711/712 post directly today), UI screens, OpenAPI 
   `material_valuation` AND posts the journal through `JournalService.post(…, { tx })`
   (`PostOptions.tx`, the §5.2 caller-tx mode) — the journal exists iff the stock change does.
   Never write stock/valuation outside this service; never post inventory GL any other way.
+- **Value-only revaluation (`revaluateValue`, landed cost).** The one other valuation-write path:
+  given a caller's tx, it locks the `material_valuation` row(s) (same sorted-order SELECT FOR UPDATE),
+  adds the on-hand-**covered** cost share to `stock_value` with `valuation_qty` UNCHANGED, re-derives
+  `moving_avg_price = averagePrice6(unchanged qty, newValue)`, and posts ONE journal (Dr BSX covered /
+  Dr PRD uncovered / + caller AP·VAT offset / + foreign realized-FX residue) through `JournalService.
+  post(…,{tx})` with a `lc:<id>` key + POSTS edge. It NEVER adds value to a zero-qty row (the
+  already-issued share is the caller's PRD line, not a stock write) — so the `material_valuation_empty_zero_ck`
+  invariant holds. The covered split reuses `valueAtAverage` (exact proportional share). The Dr BSX
+  amount IS the `stock_value` delta, so Σ stock_value == BSX recon stays 0. No goods_movement row.
 - **`material_valuation` is the reconciliation anchor.** `stock_value` (NUMERIC(18,4), exact
   `Money`) is what sits on the BSX account for that (material, plant); every journal amount IS a
   `stock_value` delta. `moving_avg_price` (scale 6) is DERIVED (`stock_value / valuation_qty`) —
@@ -115,6 +129,10 @@ physical-inventory documents (711/712 post directly today), UI screens, OpenAPI 
   amounts in functional currency; `reference` = `inventory.goods_movement:<docNo>`; journal doc_no
   stays on the JE range (movement doc types own no JE range yet). Traceability: doc_flow edge
   `inventory.goods_movement` —`POSTS`→ `finance.journal_entry` (§4.3), same tx.
+- `revaluateValue()` (landed cost, called by procurement — no REST of its own) → a `KR` journal:
+  **Dr BSX (covered) / Dr PRD (uncovered) / + caller AP·VAT / + realized FX**; `stock_value` rises by
+  the covered amount with qty unchanged; the source is the caller's `procurement.landed_cost` doc
+  (`procurement.landed_cost` —`POSTS`→ `finance.journal_entry`), NOT a goods_movement.
 
 ## Domain events
 - None of its own yet: the value-moving fact rides the journal's outbox event
