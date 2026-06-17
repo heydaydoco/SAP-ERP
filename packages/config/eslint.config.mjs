@@ -24,5 +24,12 @@ export default tseslint.config(
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+  {
+    // Maintenance/codegen scripts exist to print to the console — that IS their output.
+    files: ['scripts/**', '**/scripts/**'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
   prettier,
 );

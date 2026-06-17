@@ -4,7 +4,6 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { and, eq } from 'drizzle-orm';
 import { schema, type Database } from '@erp/db';
 import { OrgStructureService } from '../../src/domains/platform/org-structure/org-structure.service.js';
 import { FiscalPeriodService } from '../../src/domains/platform/admin-config/fiscal-period.service.js';
