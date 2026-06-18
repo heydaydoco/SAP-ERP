@@ -13,10 +13,12 @@ import { plant, storageLocation } from '../platform/org-structure';
  * document). Posted rows are immutable by convention (§5.1) — correction = reversal document,
  * deferred to a follow-up slice (hence no reversal columns yet).
  *
- * Movement types (SAP essence, PO-free direct movements only in this slice):
+ * Movement types (SAP essence):
  *   561 initial stock load (+, priced, recalculates MAP) · 101 goods receipt (+, priced,
  *   recalculates MAP) · 201 goods issue to cost center (−, at current MAP) · 711 inventory
- *   shortage (−, at current MAP) · 712 inventory surplus (+, valued at current MAP, MAP-neutral).
+ *   shortage (−, at current MAP) · 712 inventory surplus (+, valued at current MAP, MAP-neutral) ·
+ *   601 sales goods issue / delivery (−, at current MAP — COGS recognition; the O2C caller routes the
+ *   offset to COGS instead of GBB). 601 is an ISSUE like 201/711 (no external price; MAP-valued).
  *
  * The FI journal is linked via a doc_flow edge (`inventory.goods_movement` → POSTS →
  * `finance.journal_entry`), never a bespoke FK (§4.3). Amounts are in the company's functional
@@ -50,7 +52,7 @@ export const goodsMovement = pgTable(
     check('goods_movement_status_ck', sql`${t.status} = 'POSTED'`),
     check(
       'goods_movement_type_ck',
-      sql`${t.movementType} in ('561', '101', '201', '711', '712')`,
+      sql`${t.movementType} in ('561', '101', '201', '711', '712', '601')`,
     ),
     index('goods_movement_plant_date_idx').on(t.plantId, t.postingDate),
   ],

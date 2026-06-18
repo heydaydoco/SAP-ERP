@@ -6,6 +6,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { FinanceAccountingModule } from './domains/finance-accounting/finance-accounting.module.js';
 import { InventoryWarehouseModule } from './domains/inventory-warehouse/inventory-warehouse.module.js';
 import { ProcurementModule } from './domains/procurement/procurement.module.js';
+import { SalesModule } from './domains/sales/sales.module.js';
 import { MasterDataModule } from './domains/master-data/master-data.module.js';
 import { AdminConfigModule } from './domains/platform/admin-config/admin-config.module.js';
 import { AuthModule } from './domains/platform/auth/auth.module.js';
@@ -38,6 +39,7 @@ import { HealthController } from './health.controller.js';
     FinanceAccountingModule,
     InventoryWarehouseModule,
     ProcurementModule,
+    SalesModule,
   ],
   controllers: [HealthController],
   providers: [

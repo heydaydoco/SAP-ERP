@@ -13,17 +13,20 @@ const isoDate = z
   }, 'date must be a real calendar date');
 
 /**
- * Movement types in this slice (PO-free direct movements):
+ * Movement types:
  * 561 initial load (+, priced) · 101 direct GR (+, priced) · 201 issue to cost center (−) ·
- * 711 inventory shortage (−) · 712 inventory surplus (+, valued at current MAP).
+ * 711 inventory shortage (−) · 712 inventory surplus (+, valued at current MAP) ·
+ * 601 sales goods issue / delivery (−, at current MAP — COGS recognition; the O2C caller passes
+ * `offsetKey: 'COGS'` so the offset hits 매출원가 instead of GBB). 601 is an ISSUE like 201/711 — it is
+ * MAP-valued and carries NO external unit price (it must NEVER be in PRICED_TYPES).
  */
-export const movementTypeSchema = z.enum(['561', '101', '201', '711', '712']);
+export const movementTypeSchema = z.enum(['561', '101', '201', '711', '712', '601']);
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
 /** Movement types that carry an external unit price and recalculate the moving average. */
 export const PRICED_TYPES: ReadonlySet<MovementType> = new Set(['561', '101']);
 /** Movement types that DECREASE stock (valued at the current moving average). */
-export const ISSUE_TYPES: ReadonlySet<MovementType> = new Set(['201', '711']);
+export const ISSUE_TYPES: ReadonlySet<MovementType> = new Set(['201', '711', '601']);
 
 /** Positive quantity, `NUMERIC(18,6)` shape. */
 const qtySchema = z

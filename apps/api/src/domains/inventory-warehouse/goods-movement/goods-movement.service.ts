@@ -102,12 +102,26 @@ function assertFitsValue(value: Money, code: string): void {
   }
 }
 
+/** One movement line's exact stock_value delta (the `Money` the engine posted for it). */
+export interface ConsumedLine {
+  lineNo: number;
+  amount: Money;
+}
+
 export interface PostedGoodsMovement {
   goodsMovementId: string;
   docNo: string;
   status: string;
   /** NULL only for a zero-value movement (no GL impact — e.g. a receipt priced at 0). */
   journalId: string | null;
+  /**
+   * Per-line stock_value delta the movement posted (the verbatim in-memory `Money`, never recomputed).
+   * For an ISSUE (201/711/**601**) this is the consumed value — the O2C delivery caller reads it as the
+   * per-line COGS. For a receipt it is the receipt value. Existing callers (GR) simply ignore it.
+   */
+  perItemConsumed: ConsumedLine[];
+  /** Σ of `perItemConsumed.amount` (the document/functional currency); the total COGS of a 601 GI. */
+  totalConsumed: Money;
 }
 
 /**
@@ -371,6 +385,7 @@ export class GoodsMovementService {
         //    document compound correctly), apply the §3.1 exact-Money math from map.ts.
         const accounts = new Map<string, { bsx: string; offset: string }>();
         const lines: PostingLine[] = [];
+        const consumed: ConsumedLine[] = [];
         const itemRows: (typeof schema.goodsMovementItem.$inferInsert)[] = [];
         for (const [i, item] of dto.items.entries()) {
           const state = states.get(item.materialId);
@@ -431,6 +446,10 @@ export class GoodsMovementService {
           assertFitsValue(state.value, code);
           assertFitsQty(state.qty6, code);
           assertFitsQty(stockState.qty6, code);
+
+          // Per-line stock_value delta, verbatim (never recomputed) — the O2C delivery caller reads the
+          // ISSUE amount as the line's COGS. GR callers ignore it.
+          consumed.push({ lineNo: i + 1, amount });
 
           itemRows.push({
             goodsMovementId: header.id,
@@ -571,7 +590,15 @@ export class GoodsMovementService {
           await this.fiscal.resolveOpenPeriod(company.companyCodeId, dto.postingDate, tx);
         }
 
-        return { goodsMovementId: header.id, docNo, status: 'POSTED', journalId };
+        const totalConsumed = consumed.reduce((sum, c) => sum.add(c.amount), zero);
+        return {
+          goodsMovementId: header.id,
+          docNo,
+          status: 'POSTED',
+          journalId,
+          perItemConsumed: consumed,
+          totalConsumed,
+        };
       });
     } catch (e) {
       // Concurrent duplicate post: the UNIQUE(plant, posting_key) gate fired — replay the winner.
@@ -956,12 +983,31 @@ export class GoodsMovementService {
     id: string;
     docNo: string;
     status: string;
+    currency: string;
   }): Promise<PostedGoodsMovement> {
+    // Replay path: rebuild perItemConsumed/totalConsumed from the persisted goods_movement_item.amount
+    // verbatim (never recomputed), in the movement's functional currency.
+    const currency = row.currency as CurrencyCode;
+    const items = await this.db
+      .select({ lineNo: schema.goodsMovementItem.lineNo, amount: schema.goodsMovementItem.amount })
+      .from(schema.goodsMovementItem)
+      .where(eq(schema.goodsMovementItem.goodsMovementId, row.id))
+      .orderBy(asc(schema.goodsMovementItem.lineNo));
+    const perItemConsumed: ConsumedLine[] = items.map((it) => ({
+      lineNo: it.lineNo,
+      amount: Money.fromNumeric(it.amount, currency, this.registry),
+    }));
+    const totalConsumed = perItemConsumed.reduce(
+      (sum, c) => sum.add(c.amount),
+      Money.zero(currency, this.registry),
+    );
     return {
       goodsMovementId: row.id,
       docNo: row.docNo,
       status: row.status,
       journalId: await this.journalIdOf(row.id),
+      perItemConsumed,
+      totalConsumed,
     };
   }
 }
