@@ -4,8 +4,14 @@ import { z } from 'zod';
 export const transportModeSchema = z.enum(['SEA', 'AIR', 'RAIL', 'TRUCK']);
 export type TransportMode = z.infer<typeof transportModeSchema>;
 
-/** Trade direction (export / import). */
-export const tradeDirectionSchema = z.enum(['EXP', 'IMP']);
+/**
+ * Trade direction (수출입 구분) — shared across logistics-4pl, sales, procurement, and trade-compliance.
+ * EXP = export (수출) · DOM = domestic (내수) · IMP = import (수입). On a sales order it is STORED ONLY
+ * (§12) — it never drives tax determination (the line `tax_code` does, §5: DOM + V00 영세율 is legitimate,
+ * EXP + a taxable code is only a soft warning). Validated by Zod (never a DB CHECK) so a revision stays
+ * additive.
+ */
+export const tradeDirectionSchema = z.enum(['EXP', 'DOM', 'IMP']);
 export type TradeDirection = z.infer<typeof tradeDirectionSchema>;
 
 /** FCL / LCL container load. */

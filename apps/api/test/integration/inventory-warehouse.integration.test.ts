@@ -434,12 +434,10 @@ describe.skipIf(!dockerAvailable)('inventory-warehouse MAP goods movements (inte
     const first = await movements.post(receipt('idem', 'itest:idem', '3', '700'));
     const before = await valuationOf(mat.idem!);
     const replay = await movements.post(receipt('idem', 'itest:idem', '3', '700'));
-    expect(replay).toEqual({
-      goodsMovementId: first.goodsMovementId,
-      docNo: first.docNo,
-      status: 'POSTED',
-      journalId: first.journalId,
-    });
+    // Identical to the first post — including perItemConsumed/totalConsumed, which the replay path
+    // reconstructs verbatim from the persisted goods_movement_item amounts.
+    expect(replay).toEqual(first);
+    expect(replay.status).toBe('POSTED');
     expect(await valuationOf(mat.idem!)).toEqual(before); // no double application
     const journalRows = await db
       .select()
