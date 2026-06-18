@@ -6,3 +6,4 @@ export * from './master-data/index';
 export * from './finance-accounting/index';
 export * from './inventory-warehouse/index';
 export * from './procurement/index';
+export * from './sales/index';

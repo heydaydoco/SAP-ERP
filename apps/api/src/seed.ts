@@ -116,6 +116,14 @@ async function seed(): Promise<void> {
       prefix: 'LC-',
       padding: 6,
     });
+    // Sales billing (SD) documents own a global-scoped range (like the SO range); the AR open item they
+    // raise draws the finance.ar_invoice DR range (docType DR). The delivery/GI rides the GM-<year>
+    // goods-movement range. v1 is 2026-only — a new year needs the DR/JE/GM year ranges (re-)seeded.
+    await numbering.defineRange({
+      object: 'sales.billing',
+      prefix: 'BL-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -175,6 +183,10 @@ async function seed(): Promise<void> {
       // capitalizes only the on-hand share onto BSX; the already-issued (uncovered) share is expensed
       // here. The capitalized share itself reuses the BSX determination above (no new stock account).
       { transactionKey: 'PRD', glAccount: '5900' }, // 재고원가차이 (uncovered landed cost / price diff)
+      // Sales slice (§4.5): COGS = 매출원가, the GI (delivery 601) offset. A SINGLE WILDCARD rule (no
+      // valuation_class) — the COGS account is the same regardless of valuation class this slice; the
+      // BSX (stock) leg still resolves per valuation class above. Without it a sales GI throws (no rule).
+      { transactionKey: 'COGS', glAccount: '5200' }, // 매출원가 (sales goods-issue offset)
     ]) {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -242,6 +254,8 @@ async function seed(): Promise<void> {
       // is expensed here. currency null (omitted) like the other clearing/diff accounts, so a foreign
       // cost invoice's document-currency PRD line is not rejected.
       { accountNumber: '5900', name: '재고원가차이', accountType: 'EXPENSE' as const },
+      // Sales slice: 매출원가 (COGS) — the sales GI (delivery 601) debits this at the current MAP value.
+      { accountNumber: '5200', name: '매출원가', accountType: 'EXPENSE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',
@@ -273,6 +287,16 @@ async function seed(): Promise<void> {
         kind: 'INPUT' as const,
         ratePercent: '10',
         glAccount: '1350',
+      },
+      // Sales zero-rate (영세율) — exports AND 내국신용장/구매확인서 domestic supplies. OUTPUT kind, 0% so
+      // the VAT journal line drops (the base rides its revenue line). The trade direction never picks it;
+      // it is assigned explicitly per SO line (§5). 2550 is carried for 매출처별세금계산서합계표 reporting.
+      {
+        code: 'V00',
+        name: '매출 영세율 (수출/내국신용장)',
+        kind: 'OUTPUT' as const,
+        ratePercent: '0',
+        glAccount: '2550',
       },
     ]) {
       await taxCodes.ensureTaxCode(tax);
@@ -348,10 +372,10 @@ async function seed(): Promise<void> {
     });
 
     console.warn(
-      `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges + ` +
-        `enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
-        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD) + ` +
-        `master data (5 currencies / 4 fx rates / 13 GL accounts / 3 tax codes / cost center 1000 / ` +
+      `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges (incl. sales ` +
+        `SO-/BL-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS) + ` +
+        `master data (5 currencies / 4 fx rates / 14 GL accounts / 4 tax codes / cost center 1000 / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000 / ` +
         `2 material valuations at plant 1010: FG-1000=7920 + RM-2000=3000)`,
     );
