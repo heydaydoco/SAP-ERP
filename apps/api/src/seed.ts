@@ -124,6 +124,14 @@ async function seed(): Promise<void> {
       prefix: 'BL-',
       padding: 6,
     });
+    // Physical-inventory (재고 실사) count documents own a global-scoped range (like SO-/BL-): the doc
+    // is a header counting document. The 701/702 stock adjustment it spawns rides the GM-<year>
+    // goods-movement range, so no new GM range is needed.
+    await numbering.defineRange({
+      object: 'inventory.physical_inventory',
+      prefix: 'PI-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -187,6 +195,12 @@ async function seed(): Promise<void> {
       // valuation_class) — the COGS account is the same regardless of valuation class this slice; the
       // BSX (stock) leg still resolves per valuation class above. Without it a sales GI throws (no rule).
       { transactionKey: 'COGS', glAccount: '5200' }, // 매출원가 (sales goods-issue offset)
+      // Physical-inventory slice (§4.5): IDI = 재고조정손익, the 실사 adjustment (701 gain / 702 loss)
+      // offset. A SINGLE WILDCARD rule (no valuation_class) — one account holds both directions
+      // (701: Dr BSX / Cr IDI, 702: Dr IDI / Cr BSX); the BSX (stock) leg still resolves per valuation
+      // class. Distinct from PRD (5900 재고원가차이): physical-count gain/loss is ledger-separable from
+      // landed-cost price differences. Without it a 701/702 with a non-zero diff throws (no rule).
+      { transactionKey: 'IDI', glAccount: '5910' }, // 재고조정손익 (physical-inventory adjustment offset)
     ]) {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -256,6 +270,10 @@ async function seed(): Promise<void> {
       { accountNumber: '5900', name: '재고원가차이', accountType: 'EXPENSE' as const },
       // Sales slice: 매출원가 (COGS) — the sales GI (delivery 601) debits this at the current MAP value.
       { accountNumber: '5200', name: '매출원가', accountType: 'EXPENSE' as const },
+      // Physical-inventory slice: 재고조정손익 (IDI) — the 실사 adjustment offset, both directions (701
+      // gain credits it / 702 loss debits it) at the current MAP. currency null (omitted) like the other
+      // diff accounts. Separate from 5900 재고원가차이 (PRD) so count gain/loss is ledger-separable.
+      { accountNumber: '5910', name: '재고조정손익', accountType: 'EXPENSE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',
@@ -373,9 +391,9 @@ async function seed(): Promise<void> {
 
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges (incl. sales ` +
-        `SO-/BL-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
-        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS) + ` +
-        `master data (5 currencies / 4 fx rates / 14 GL accounts / 4 tax codes / cost center 1000 / ` +
+        `SO-/BL- + 실사 PI-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS/IDI) + ` +
+        `master data (5 currencies / 4 fx rates / 15 GL accounts / 4 tax codes / cost center 1000 / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000 / ` +
         `2 material valuations at plant 1010: FG-1000=7920 + RM-2000=3000)`,
     );
