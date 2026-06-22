@@ -8,9 +8,11 @@
 ## Modules
 - `inventory` ✅ — `material_valuation` (MAP accounting view, §4.4 extension) + `stock` (qty per
   storage location) + the inventory↔GL `/reconciliation` check
-- `goods-movement` ✅ — PO-free direct movements (561/101/201/711/712) posting stock + valuation +
+- `goods-movement` ✅ — direct movements (561/101/201/711/712/601/701/702) posting stock + valuation +
   FI journal in ONE transaction
-- `warehouse` · `batch-serial` · `stock-taking` — later
+- `physical-inventory` ✅ — 재고 실사: count document (book_qty snapshot → physical_qty → 701/702 차이
+  조정, offset IDI → 재고조정손익 5910), reusing the goods-movement engine
+- `warehouse` · `batch-serial` — later
 
 ## Status
 🟧 **In progress (Phase 3, slice 1 shipped; slice 2 extended it).** Moving-average (MAP) valuation +
@@ -27,10 +29,18 @@ Slice 4 (landed cost) added a **value-only revaluation sibling** `GoodsMovementS
 to `stock_value` with the quantity UNCHANGED (no goods_movement row, no movement_type/qty CHECK change —
 migration 0013 only adds procurement's landed_cost tables, nothing here). The engine stays the single
 writer of valuation → FI.
+Slice 6 (physical inventory / 재고 실사, migration **0015**) added the **count document**
+(`physical_inventory_doc`/`_item`) + the movement types **701** (stock gain) / **702** (stock loss).
+A count is NOT a new engine: it snapshots `book_qty` (= `stock.qty`), takes `physical_qty`, and posts each
+non-zero difference through `GoodsMovementService.post()` with `offsetKey: 'IDI'` (재고조정손익 5910) — gains
+as one 701 (Dr BSX / Cr IDI), losses as one 702 (Dr IDI / Cr BSX), both valued at the current MAP, with an
+`ADJUSTS` doc_flow edge back to the count doc. `diff_qty=0` posts nothing. The IN-list widen (701/702) is
+the only non-additive ALTER in 0015.
 Deferred: PR, movement **reversal** (102/202 — the doc framework's reversal-pair
 columns are deliberately absent until then), negative stock, FIFO, transfer postings, batch/serial,
-physical-inventory documents (711/712 post directly today), UI screens, OpenAPI registry entries
-(web client can't see these endpoints yet).
+physical-inventory **count/post separation** + stock **freeze** + cycle-count scheduling + recount +
+difference-approval workflow (the count posts immediately this slice) + empty-stock (no-MAP) gain as a
+priced load, UI screens, OpenAPI registry entries (web client can't see these endpoints yet).
 
 > **Note:** `goods-movement` is the single source of stock changes → FI. MAP only in this slice.
 
@@ -114,8 +124,14 @@ physical-inventory documents (711/712 post directly today), UI screens, OpenAPI 
   denormalized plant to the location's own plant at the DB level (a mismatch — which would break
   Σ stock.qty == valuation_qty — is impossible to persist, service bug or not).
 - `goods_movement` — §4.2 doc framework, tightened: status POSTED-only, `posting_key` NN, UNIQUE
-  (plant, posting_key); `movement_type` CHECK ∈ {561,101,201,711,712}; `doc_no` `GM-<year>-NNNNNN`
-  from number range `inventory.goods_movement` (per-fiscal-year scope).
+  (plant, posting_key); `movement_type` CHECK ∈ {561,101,201,711,712,601,701,702}; `doc_no`
+  `GM-<year>-NNNNNN` from number range `inventory.goods_movement` (per-fiscal-year scope).
+- `physical_inventory_doc` (0015) — §4.2 header, status ∈ COUNTED/POSTED, `posting_key` NN UNIQUE
+  (plant); `doc_no` `PI-NNNNNN` (range `inventory.physical_inventory`, GLOBAL). Qty-only (no money col);
+  the adjustment value lives on the 701/702 journal. Linked to its movements via `ADJUSTS` doc_flow.
+- `physical_inventory_item` (0015) — material + plant + sloc (composite FK pins sloc→plant), `book_qty`
+  snapshot, `physical_qty`, `diff_qty` (= physical − book; CHECK enforces it; NEGATIVE for a loss, so no
+  sign CHECK). Explicit short FK names.
 - `goods_movement_item` — qty > 0 (magnitude; direction lives on the header type), `unit_price`
   (receipts, ALWAYS in the functional currency — an import GR's caller pre-translates), `amount` = the
   exact stock_value delta (= journal line amount, functional currency). Import trade trace (0012):
@@ -133,6 +149,11 @@ physical-inventory documents (711/712 post directly today), UI screens, OpenAPI 
   **Dr BSX (covered) / Dr PRD (uncovered) / + caller AP·VAT / + realized FX**; `stock_value` rises by
   the covered amount with qty unchanged; the source is the caller's `procurement.landed_cost` doc
   (`procurement.landed_cost` —`POSTS`→ `finance.journal_entry`), NOT a goods_movement.
+- `POST /inventory-warehouse/physical-inventories` (재고 실사) → per non-zero count difference a
+  goods-movement journal: 701 gain `WE` **Dr BSX / Cr IDI (재고조정손익)**, 702 loss `WA` **Dr IDI / Cr
+  BSX**, valued at the current MAP; offset routed via `offsetKey: 'IDI'`. Lineage: `goods_movement`
+  —`ADJUSTS`→ `physical_inventory_doc` + `goods_movement` —`POSTS`→ journal (engine-written, subledger-
+  fenced). `diff_qty=0` → no journal. IDI (5910) is not a BSX account, so recon delta stays 0.
 
 ## Domain events
 - None of its own yet: the value-moving fact rides the journal's outbox event
@@ -141,4 +162,5 @@ physical-inventory documents (711/712 post directly today), UI screens, OpenAPI 
 
 ## Permissions
 `inventory:goods_movement:{post,read}` · `inventory:material_valuation:{manage,read}` ·
-`inventory:stock:read` (declared on controllers; ADMIN `*` covers them.)
+`inventory:stock:read` · `inventory:physical_inventory:{create,read}`
+(declared on controllers; ADMIN `*` covers them.)

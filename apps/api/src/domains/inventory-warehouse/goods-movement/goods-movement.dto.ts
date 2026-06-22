@@ -19,14 +19,18 @@ const isoDate = z
  * 601 sales goods issue / delivery (−, at current MAP — COGS recognition; the O2C caller passes
  * `offsetKey: 'COGS'` so the offset hits 매출원가 instead of GBB). 601 is an ISSUE like 201/711 — it is
  * MAP-valued and carries NO external unit price (it must NEVER be in PRICED_TYPES).
+ * 701 physical-inventory stock GAIN (+, valued at current MAP, MAP-neutral — same path as 712 surplus) ·
+ * 702 physical-inventory stock LOSS (−, at current MAP — same path as 201/711). The 실사 caller passes
+ * `offsetKey: 'IDI'` so the offset hits 재고조정손익 instead of GBB. Both are UNPRICED (never in
+ * PRICED_TYPES); 702 is an ISSUE, 701 is a (712-style) surplus — never in ISSUE_TYPES.
  */
-export const movementTypeSchema = z.enum(['561', '101', '201', '711', '712', '601']);
+export const movementTypeSchema = z.enum(['561', '101', '201', '711', '712', '601', '701', '702']);
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
 /** Movement types that carry an external unit price and recalculate the moving average. */
 export const PRICED_TYPES: ReadonlySet<MovementType> = new Set(['561', '101']);
 /** Movement types that DECREASE stock (valued at the current moving average). */
-export const ISSUE_TYPES: ReadonlySet<MovementType> = new Set(['201', '711', '601']);
+export const ISSUE_TYPES: ReadonlySet<MovementType> = new Set(['201', '711', '601', '702']);
 
 /** Positive quantity, `NUMERIC(18,6)` shape. */
 const qtySchema = z

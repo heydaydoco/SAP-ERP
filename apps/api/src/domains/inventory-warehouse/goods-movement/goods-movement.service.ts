@@ -225,10 +225,10 @@ interface StockState {
  * Valuation rules (MAP):
  *  - 561/101 priced receipts: value = qty × unitPrice (exact `Money`, half-away); the moving
  *    average becomes new_value / new_qty.
- *  - 201/711 issues: valued at the CURRENT average — the exact proportional share of
+ *  - 201/711/601/702 issues: valued at the CURRENT average — the exact proportional share of
  *    `stock_value`, so a full issue empties the value to zero; the average price is INVARIANT.
- *  - 712 surplus: quantity in at the current average (MAP-neutral); rejected on empty stock
- *    (no average to value it at).
+ *  - 712/701 surplus/gain: quantity in at the current average (MAP-neutral); rejected on empty
+ *    stock (no average to value it at). Offset is GBB by default; the 실사 caller passes IDI.
  * Every journal amount IS a `stock_value` delta, so Σ stock_value == BSX GL balance at all times
  * (the /reconciliation invariant). GL accounts come from account_determination (BSX/GBB by
  * valuation class) — never hard-coded (§4.5).
@@ -423,14 +423,15 @@ export class GoodsMovementService {
             state.value = state.value.subtract(amount);
             stockState.qty6 -= qty6;
           } else {
-            // 712 surplus: quantity in at the current average (MAP-neutral) — needs an average.
+            // 712 surplus / 701 physical-inventory gain: quantity in at the current average
+            // (MAP-neutral) — needs an existing average to value the gain at.
             if (state.qty6 <= 0n) {
               throw new BadRequestException(
-                `movement type 712 values the surplus at the current moving average, but material ` +
-                  `${code} has no stock at this plant — post a priced receipt (561/101) instead`,
+                `movement type ${movementType} values the gain at the current moving average, but ` +
+                  `material ${code} has no stock at this plant — post a priced receipt (561/101) instead`,
               );
             }
-            // allowExceed: a surplus may legitimately exceed the book quantity (count > book).
+            // allowExceed: a surplus/gain may legitimately exceed the book quantity (count > book).
             amount = valueAtAverage(qty6, state.qty6, state.value, true);
             state.qty6 += qty6;
             state.value = state.value.add(amount);

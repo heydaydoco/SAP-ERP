@@ -54,3 +54,42 @@ describe('createGoodsMovementSchema — 601 sales GI is an UNPRICED, MAP-valued 
     }
   });
 });
+
+/**
+ * Regression guard for the physical-inventory slice: 701 (stock gain) and 702 (stock loss) are UNPRICED,
+ * MAP-valued adjustment types. 702 is an ISSUE (decrease, like 201/711); 701 is a 712-style surplus
+ * (increase) — so 701 is NOT in ISSUE_TYPES. NEITHER is ever a PRICED type, and the schema must reject a
+ * unitPrice on both. The PhysicalInventoryService always builds them internally, so only this schema-level
+ * test pins the enum/set widening — a regression dropping 701/702 from the enum, or adding them to
+ * PRICED_TYPES, would otherwise slip through.
+ */
+describe('createGoodsMovementSchema — 701/702 physical-inventory adjustments are UNPRICED', () => {
+  it('702 is an ISSUE (loss); 701 is a surplus (gain), NOT an ISSUE; neither is PRICED', () => {
+    expect(ISSUE_TYPES.has('702')).toBe(true);
+    expect(ISSUE_TYPES.has('701')).toBe(false);
+    expect(PRICED_TYPES.has('701')).toBe(false);
+    expect(PRICED_TYPES.has('702')).toBe(false);
+  });
+
+  it.each(['701', '702'] as const)('accepts a %s adjustment with no unitPrice (MAP prices it)', (mt) => {
+    const r = createGoodsMovementSchema.safeParse({
+      ...base,
+      movementType: mt,
+      items: [{ materialId: MAT, storageLocationId: SLOC, qty: '3' }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it.each(['701', '702'] as const)('rejects a unitPrice on a %s adjustment (not allowed)', (mt) => {
+    const r = createGoodsMovementSchema.safeParse({
+      ...base,
+      movementType: mt,
+      items: [{ materialId: MAT, storageLocationId: SLOC, qty: '3', unitPrice: '100' }],
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.path.join('.') === 'items.0.unitPrice');
+      expect(issue?.message).toMatch(/not allowed/);
+    }
+  });
+});

@@ -9,6 +9,8 @@ import { GoodsMovementService } from './goods-movement/goods-movement.service.js
 import { MaterialValuationController } from './inventory/material-valuation.controller.js';
 import { MaterialValuationService } from './inventory/material-valuation.service.js';
 import { InventoryReconciliationService } from './inventory/reconciliation.service.js';
+import { PhysicalInventoryController } from './physical-inventory/physical-inventory.controller.js';
+import { PhysicalInventoryService } from './physical-inventory/physical-inventory.service.js';
 
 /**
  * Inventory & Warehouse domain module (Phase 3 slice 1: MAP valuation + goods movements).
@@ -25,8 +27,22 @@ import { InventoryReconciliationService } from './inventory/reconciliation.servi
     MasterDataModule,
     FinanceAccountingModule,
   ],
-  providers: [GoodsMovementService, MaterialValuationService, InventoryReconciliationService],
-  controllers: [GoodsMovementController, MaterialValuationController],
-  exports: [GoodsMovementService, MaterialValuationService, InventoryReconciliationService],
+  providers: [
+    GoodsMovementService,
+    MaterialValuationService,
+    InventoryReconciliationService,
+    PhysicalInventoryService,
+  ],
+  controllers: [
+    GoodsMovementController,
+    MaterialValuationController,
+    PhysicalInventoryController,
+  ],
+  exports: [
+    GoodsMovementService,
+    MaterialValuationService,
+    InventoryReconciliationService,
+    PhysicalInventoryService,
+  ],
 })
 export class InventoryWarehouseModule {}
