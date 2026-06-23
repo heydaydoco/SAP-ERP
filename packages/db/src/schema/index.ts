@@ -7,3 +7,4 @@ export * from './finance-accounting/index';
 export * from './inventory-warehouse/index';
 export * from './procurement/index';
 export * from './sales/index';
+export * from './trade-compliance/index';

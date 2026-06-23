@@ -132,6 +132,13 @@ async function seed(): Promise<void> {
       prefix: 'PI-',
       padding: 6,
     });
+    // Export declaration (수출신고) owns a global-scoped range (ED-NNNNNN). The internal doc_no is distinct
+    // from the externally-issued 수출신고번호/MRN (UNI-PASS), which is captured as a manual string field.
+    await numbering.defineRange({
+      object: 'trade.export_declaration',
+      prefix: 'ED-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -391,7 +398,7 @@ async function seed(): Promise<void> {
 
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges (incl. sales ` +
-        `SO-/BL- + 실사 PI-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `SO-/BL- + 실사 PI- + 수출신고 ED-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS/IDI) + ` +
         `master data (5 currencies / 4 fx rates / 15 GL accounts / 4 tax codes / cost center 1000 / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000 / ` +
