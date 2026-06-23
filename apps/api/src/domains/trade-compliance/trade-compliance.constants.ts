@@ -34,3 +34,45 @@ export const REL_DECLARES = 'DECLARES';
 
 /** Number-range object (SAP Number Range) — global-scoped, like the SO/PO ranges. doc_no = ED-NNNNNN. */
 export const NUMBER_OBJECT_EXPORT_DECLARATION = 'trade.export_declaration';
+
+// ── import-declaration (수입신고) — the symmetric IMPORT leg ──────────────────────────────────────────
+
+/**
+ * Document type owned by the import declaration. 'IM' (not 'ID') — the doc_type and the doc_no prefix
+ * stay aligned ('IM' / 'IM-'), and 'ID' reads as an identifier. Symmetric to export's 'ED' / 'ED-'.
+ */
+export const DOC_TYPE_IMPORT_DECLARATION = 'IM';
+
+/** doc_flow node type (§4.3) — the import declaration header. */
+export const DOC_FLOW_TYPE_IMPORT_DECLARATION = 'trade_compliance.import_declaration';
+
+/**
+ * doc_flow node type for the import GOODS RECEIPT (the physical lineage target) — the 수입 GR IS a 101
+ * goods_movement. Value EQUALS `DOC_FLOW_TYPE_DELIVERY` ('inventory.goods_movement') — both a 601 GI and a
+ * 101 GR are goods_movement nodes; the distinct name documents that the import leg anchors to a RECEIPT.
+ *
+ * The import declaration writes the ONLY doc_flow edge that TARGETS this goods_movement node: the GR's own
+ * `RECEIVES` edges are sourced FROM its lines TO the PO, and landed cost's `CAPITALIZES` edges target the
+ * PO item (`procurement.purchase_order_item`) — neither points AT the goods_movement node. It is still the
+ * same PHYSICAL receipt whose inventory VALUE landed cost capitalizes (the FI/valuation sense) — the mirror
+ * of export's `DECLARES`→601 GI. Referenced as a PLAIN STRING target (no FK, no cross-domain import).
+ *
+ * Why the GR and NOT the import invoice / landed cost: 수입신고 is filed against the physically received
+ * goods (입항 → 보세반입 → 신고 → 수리 → 반출); the GR always exists at 신고 time. Anchoring to the GR (not
+ * landed cost) keeps the declaration's lineage independent of whether landed cost has posted yet — one
+ * physical truth, two non-overlapping concerns (legal record vs FI capitalization).
+ */
+export const DOC_FLOW_TYPE_GOODS_RECEIPT = 'inventory.goods_movement';
+
+/** The 수입 GR movement type (SAP 101 priced goods receipt) the declaration must anchor to. */
+export const GR_MOVEMENT_TYPE = '101';
+
+/**
+ * doc_flow relationship: an import declaration DECLARES the 수입 GR (101 receipt) it is filed against —
+ * newer document → the earlier physical document it derives from. Reuses the `DECLARES` edge kind (export
+ * → 601 GI symmetry). NOT a POSTS edge (the declaration owns no journal). Direction: import_declaration → GR.
+ */
+// REL_DECLARES (above) is reused for the import → GR edge.
+
+/** Number-range object — global-scoped, like the ED- range. doc_no = IM-NNNNNN. */
+export const NUMBER_OBJECT_IMPORT_DECLARATION = 'trade.import_declaration';

@@ -139,6 +139,14 @@ async function seed(): Promise<void> {
       prefix: 'ED-',
       padding: 6,
     });
+    // Import declaration (수입신고) owns a global-scoped range (IM-NNNNNN), symmetric to ED-. doc_type/prefix
+    // stay aligned (IM / IM-); the externally-issued 수입신고번호/MRN is a separate manual string field. The
+    // declaration posts NOTHING (landed cost owns import accounting) — only this range is needed.
+    await numbering.defineRange({
+      object: 'trade.import_declaration',
+      prefix: 'IM-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -398,7 +406,7 @@ async function seed(): Promise<void> {
 
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges (incl. sales ` +
-        `SO-/BL- + 실사 PI- + 수출신고 ED-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `SO-/BL- + 실사 PI- + 수출신고 ED- + 수입신고 IM-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS/IDI) + ` +
         `master data (5 currencies / 4 fx rates / 15 GL accounts / 4 tax codes / cost center 1000 / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000 / ` +
