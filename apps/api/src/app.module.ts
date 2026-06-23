@@ -7,6 +7,7 @@ import { FinanceAccountingModule } from './domains/finance-accounting/finance-ac
 import { InventoryWarehouseModule } from './domains/inventory-warehouse/inventory-warehouse.module.js';
 import { ProcurementModule } from './domains/procurement/procurement.module.js';
 import { SalesModule } from './domains/sales/sales.module.js';
+import { TradeComplianceModule } from './domains/trade-compliance/trade-compliance.module.js';
 import { MasterDataModule } from './domains/master-data/master-data.module.js';
 import { AdminConfigModule } from './domains/platform/admin-config/admin-config.module.js';
 import { AuthModule } from './domains/platform/auth/auth.module.js';
@@ -40,6 +41,7 @@ import { HealthController } from './health.controller.js';
     InventoryWarehouseModule,
     ProcurementModule,
     SalesModule,
+    TradeComplianceModule,
   ],
   controllers: [HealthController],
   providers: [
