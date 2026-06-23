@@ -11,3 +11,15 @@ import { z } from 'zod';
 export const EXPORT_DECLARATION_STATUS = ['SUBMITTED', 'ACCEPTED'] as const;
 export const exportDeclarationStatusSchema = z.enum(EXPORT_DECLARATION_STATUS);
 export type ExportDeclarationStatus = z.infer<typeof exportDeclarationStatusSchema>;
+
+/**
+ * Import-declaration (수입신고) lifecycle — the symmetric IMPORT leg. `SUBMITTED` = filed with 관세청
+ * (UNI-PASS); `ACCEPTED` = 수리, when the 수입신고필증 / MRN (수입신고번호) + 신고수리일 are stamped. A
+ * 수입신고 is a COMPLIANCE document — it posts NOTHING to FI: import accounting (관세 + 수입부가세 재고원가
+ * 배부) is the landed-cost document's sole job, so the declaration's 과세가격/관세액/부가세액 are legal
+ * RECORD fields. It only LINKS (via doc_flow `DECLARES`) onto the same 수입 GR. Validated by Zod here;
+ * enforced on the document table by a status CHECK.
+ */
+export const IMPORT_DECLARATION_STATUS = ['SUBMITTED', 'ACCEPTED'] as const;
+export const importDeclarationStatusSchema = z.enum(IMPORT_DECLARATION_STATUS);
+export type ImportDeclarationStatus = z.infer<typeof importDeclarationStatusSchema>;
