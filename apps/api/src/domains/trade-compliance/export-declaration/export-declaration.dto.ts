@@ -75,9 +75,14 @@ export const createExportDeclarationSchema = z.object({
 });
 export type CreateExportDeclarationDto = z.infer<typeof createExportDeclarationSchema>;
 
-/** accept(): stamp the externally-issued 수출신고번호 (MRN) and flip SUBMITTED → ACCEPTED. */
+/** accept(): stamp the externally-issued 수출신고번호 (MRN) + 신고수리일 and flip SUBMITTED → ACCEPTED. */
 export const acceptExportDeclarationSchema = z.object({
   declarationNo: z.string().min(1).max(35),
+  /**
+   * 신고수리일 — optional; recorded when the 수리 is captured (additive — slice 1 omitted it). Drives the
+   * duty-drawback FX basis date + 환급기한. Mirrors the import-declaration accept DTO.
+   */
+  acceptanceDate: isoDate.optional(),
 });
 export type AcceptExportDeclarationDto = z.infer<typeof acceptExportDeclarationSchema>;
 

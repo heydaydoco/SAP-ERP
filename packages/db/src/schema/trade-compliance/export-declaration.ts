@@ -67,6 +67,12 @@ export const exportDeclaration = pgTable(
     /** Declaration (filing) date — the business-event date. */
     declarationDate: date('declaration_date', { mode: 'string' }).notNull(),
     /**
+     * 신고수리일 — stamped on accept() (수리, ADDITIVE — slice 1 omitted it); NULL until accepted. Symmetric
+     * to `import_declaration.acceptance_date`. The duty-drawback slice keys the refund FX-rate basis date AND
+     * the 환급기한 (수리일 + 2년) off this — so a foreign export's 수리일 'M' rate, not the 신고일 rate.
+     */
+    acceptanceDate: date('acceptance_date', { mode: 'string' }),
+    /**
      * Trade hooks (§12) — additive nullable, Zod-validated (shared enums), no DB CHECK.
      *   incoterm        Incoterms 2020 term (shared `incotermSchema`)
      *   tradeDirection  EXP / DOM / IMP (shared `tradeDirectionSchema`) — STORED ONLY (never determines tax)

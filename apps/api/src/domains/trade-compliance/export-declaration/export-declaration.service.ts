@@ -186,7 +186,7 @@ export class ExportDeclarationService {
     return { ...result, warnings };
   }
 
-  /** 수리: stamp the externally-issued 수출신고번호 (MRN) and flip SUBMITTED → ACCEPTED. */
+  /** 수리: stamp the externally-issued 수출신고번호 (MRN) + 신고수리일 and flip SUBMITTED → ACCEPTED. */
   async accept(id: string, dto: AcceptExportDeclarationDto, actor = 'system') {
     // Atomic transition guard: only a still-SUBMITTED row flips, so two concurrent 수리 calls cannot both
     // stamp the MRN (the second updates zero rows and 409s).
@@ -195,6 +195,8 @@ export class ExportDeclarationService {
       .set({
         status: 'ACCEPTED',
         declarationNo: dto.declarationNo,
+        // ADDITIVE: stamp the 신고수리일 (drives duty-drawback). The MRN stamp + status flip are unchanged.
+        acceptanceDate: dto.acceptanceDate ?? null,
         updatedBy: actor,
         updatedAt: new Date(),
       })

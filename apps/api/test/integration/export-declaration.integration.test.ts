@@ -268,11 +268,19 @@ describe.skipIf(!dockerAvailable)('trade-compliance 수출신고 (export declara
     expect(edges[0]).toMatchObject({ targetType: DOC_FLOW_TYPE_DELIVERY, targetId: src.goodsMovementId });
     expect(DOC_FLOW_TYPE_DELIVERY).toBe('inventory.goods_movement');
 
-    // accept(): stamp the externally-issued 수출신고번호 and flip to ACCEPTED.
-    const accepted = await exportDeclarations.accept(created.exportDeclarationId, { declarationNo: '41234-26-700001X' });
-    expect(accepted).toMatchObject({ status: 'ACCEPTED', declarationNo: '41234-26-700001X' });
+    // accept(): stamp the externally-issued 수출신고번호 (MRN — UNCHANGED behavior) + the ADDITIVE 신고수리일
+    // (the duty-drawback slice's only export change). Regression: the MRN stamp + status flip are unchanged.
+    const accepted = await exportDeclarations.accept(created.exportDeclarationId, {
+      declarationNo: '41234-26-700001X',
+      acceptanceDate: '2026-03-12',
+    });
+    expect(accepted).toMatchObject({
+      status: 'ACCEPTED',
+      declarationNo: '41234-26-700001X', // MRN stamp unchanged
+      acceptanceDate: '2026-03-12', // additive 수리일 stamp
+    });
 
-    // A second accept is rejected (only a SUBMITTED declaration can be accepted).
+    // A second accept is rejected (only a SUBMITTED declaration can be accepted) — guard unchanged.
     await expect(
       exportDeclarations.accept(created.exportDeclarationId, { declarationNo: 'X' }),
     ).rejects.toThrow(/only a SUBMITTED declaration can be accepted/);
