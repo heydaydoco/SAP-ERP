@@ -8,7 +8,9 @@
 ## Modules
 - `customs-declaration` 🟧 — **`export-declaration` (수출신고) + `import-declaration` (수입신고) shipped**
   (Phase 7 slices 1–2). Both non-posting.
-- `letter-of-credit` · `fta-origin` · `hs-classification` · `duty-drawback` · `trade-document` ·
+- `duty-drawback` 🟧 — **관세환급 (간이정액) shipped** (Phase 7 slice 3, migration 0018). The domain's FIRST
+  POSTING document — approve posts Dr 관세환급금 미수금 1140 / Cr 관세환급수익 9830. 개별환급 (BOM/소요량) = later.
+- `letter-of-credit` · `fta-origin` · `hs-classification` · `trade-document` ·
   `incoterms` · `compliance-screening` · `cargo-insurance` — later.
 
 ## Status
@@ -33,6 +35,19 @@ Same lifecycle (create SUBMITTED → accept 수리 → ACCEPTED, the latter stam
 **Deferred (import):** UNI-PASS 수입 connector, FTA 원산지 판정 (here it only RECORDS origin), 관세환급
 (duty-drawback), 전략물자, 관세 감면, 보세운송 — all later slices. The slice does NOT touch landed cost / GR /
 procurement code (read-only), fi-posting, or movement types.
+
+**Slice 3 (duty-drawback 관세환급 간이정액, migration 0018)** is the domain's **FIRST POSTING** document. A
+`drawback_claim` bundles one or more source 수출신고 lines, computes the **간이정액 refund** per line
+(FOB→KRW at the source **수리일** 'M' rate × `drawback_simplified_rate` 환급률 / 10,000, §5.4-tested), and on
+**approve** posts the first real FI journal in trade-compliance: **Dr 관세환급금 미수금 1140 / Cr 관세환급수익
+9830** (account-determination keys `DUTY_DRAWBACK_RECEIVABLE`/`_INCOME`, never hard-coded). Lifecycle:
+**create (CLAIMED, non-posting) → approve (APPROVED, the journal; idempotent on the claim)**. This slice ADDED
+a nullable `acceptance_date` (신고수리일) to `export_declaration` (it was missing — the import side already had
+it); `accept()` now stamps it (the MRN stamp is unchanged), and the drawback FX basis date + 환급기한 key off
+it. **개별환급 (BOM/소요량) only**: this is 간이정액 only. **Deferred (drawback):** 개별환급 (제조/소요량 전개),
+**환급금 입금 클리어링** (AR-payment-clearing reuse — until then 1140 is a NON-recon plain asset, no 관세청
+partner), **source 라인당 unique 환급 제약** (중복환급 방지 — 분할환급 정책 확정 시; today a source line can be
+claimed more than once, no DB/service guard — accepted scope gap), UNI-PASS 연동, web screens.
 
 > **Note:** the externally-issued 수출신고번호 / 수입신고번호 (UNI-PASS MRN) is a SEPARATE column
 > (`declaration_no`) from the internal `doc_no` (ED-/IM-NNNNNN minted by NumberingService). You mint the
@@ -101,6 +116,41 @@ procurement code (read-only), fi-posting, or movement types.
 - **Read-only across domains.** goods_movement / plant / material_trade are READ-ONLY lookups — NO landed
   cost / GR / procurement WRITES, no InventoryModule import. No FI ⇒ no posting_key, no idempotency gate.
 
+### Duty drawback (관세환급, 간이정액) — the FIRST posting document
+- **A claim snapshots everything from the source 수출신고 at create; the source is READ-ONLY.** Per line the
+  service reads `export_declaration(_item)` and snapshots `hs_code` / `fob_amount` / `fob_currency` /
+  `source_acceptance_date` (수리일) — the operator NEVER re-keys FOB/HS (authoritative source, no divergence).
+  The ONLY per-line input is the OPTIONAL manual 원화 FOB override (`fobKrw`). The line is then exactly
+  reproducible from its own snapshot (incl. `fx_rate` at NUMERIC(18,6) so KRW = fob × rate is exact). The
+  source export is never written (no 'REFUNDED' flag — see the deferred source-unique gap below).
+- **간이정액 refund is exact through kernel `Money`** (`duty-drawback-calc.ts`, §5.4-tested):
+  `line_refund(원) = round(fob_krw / 10,000 × rate_per_10k)` in integer bigint math (no float). The 관세청
+  rounding rule is a PARAMETER (`DRAWBACK_REFUND_ROUNDING`, default HALF_UP 반올림; 원미만 절사 = a one-constant
+  flip). FOB→KRW: domestic is the FOB itself; foreign auto-converts at the **수리일** 'M' rate via
+  `Money.convert` (NOT the 신고일 rate) — but a **manual override bypasses FX entirely** (so a missing 수리일
+  rate is tolerated when `fobKrw` is supplied; only the genuine no-value path — foreign, no 수리일 rate, no
+  manual override — is a hard 400).
+- **Consistency gate = SOFT, never blocks (`duty-drawback-warnings.ts`, §5.4).** create ALWAYS proceeds and
+  returns `warnings[]`: **G0** source not ACCEPTED → WARN · **G1** missing source HS → `SOURCE_HS_MISSING`,
+  else no 간이정액률 matched → `SIMPLIFIED_RATE_NOT_FOUND` (either way 률=0, refund 0) · **G2** 환급기한 (수리일 +
+  2년) — 수리일 missing / 초과 / 임박(≤60일) → WARN · **G3** manual 원화 FOB deviates from the auto KRW beyond
+  max(1,000원, 1%) → WARN. A null source HS is SOFT (never a 400) — symmetric with export/import's HS gate.
+- **Posting (approve) is idempotent + subledger-owned (§5.1/§5.2).** The claim-level guard owns exactly-once:
+  APPROVED → replay (posts nothing); non-CLAIMED → 409; CLAIMED → an atomic `UPDATE … WHERE status='CLAIMED'`
+  then `JournalService.post(…, { tx })` with `posting_key = drawback:<id>:approve`. The journal is KRW
+  single-currency two-line (Dr 1140 / Cr 9830, balanced); both accounts are NON-reconciliation so the lines
+  carry no `partner_id`. A `POSTS` doc_flow edge (claim → journal) makes it FI-reverse-fenced (correction =
+  a future drawback-cancel, never a bare GL reversal). `approved_total` defaults to the claimed total but may
+  differ (관세청 결정액 우선); a 0 total is refused (nothing to post).
+- **Lineage (§4.3):** one `REFUNDS` doc_flow edge per **DISTINCT** `source_export_declaration_id` (claim →
+  export_declaration), de-duped (the partial-payment multi-edge convention). `source_export_declaration_id` /
+  `_item_ref` are PLAIN uuids — no cross-domain FK (like 수입신고's source refs).
+- **Read-only across domains.** export_declaration(_item) / company are READ-ONLY lookups. The journal is the
+  domain's first; it imports FinanceAccountingModule (`JournalService`) + AdminConfigModule
+  (`AccountDeterminationService`). ⚠️ **Source-unique is DEFERRED:** nothing prevents claiming the same source
+  line twice (→ a duplicate refund). This lands with the 분할환급 정책 / 입금 클리어링 slice; until then it is an
+  accepted, documented scope gap (no DB UNIQUE on `source_export_declaration_item_ref`, no service pre-check).
+
 ## Key tables (migration 0016)
 - `export_declaration` — §4.2 header, status ∈ SUBMITTED/ACCEPTED (CHECK); `company_code_id`,
   `customer_bp_id` (foreign buyer), `broker_bp_id` (관세사, nullable); `declaration_no` varchar(35) (UNI-PASS
@@ -122,19 +172,42 @@ procurement code (read-only), fi-posting, or movement types.
   `hs_code`/`origin_country` snapshot (nullable); `qty` (18,6) > 0, `uom`; `customs_value` (18,4) ≥ 0;
   `duty_rate` (7,4) nullable ≥ 0. Explicit FK name to the header.
 
+## Key tables (migration 0018)
+- `export_declaration` gains `acceptance_date` (date, **nullable, additive** — slice 1 omitted it; existing
+  rows stay NULL). `accept()` now stamps it; the MRN stamp is unchanged.
+- `drawback_simplified_rate` — 간이정액환급률 master (NOT a document, audit-4 only): `hs_code`,
+  `rate_per_10k` (18,4, 원/만원 FOB), `valid_from`/`valid_to` (nullable=open). UNIQUE (hs_code, valid_from);
+  CHECKs hs_code regex `^[0-9]{6,10}$`, rate ≥ 0, valid_to ≥ valid_from. Resolution = latest valid_from ≤ 수리일.
+- `drawback_claim` — §4.2 header, status ∈ CLAIMED/APPROVED (CHECK); `company_code_id` (FK); `claim_date`,
+  `approval_date` (nullable); `claimed_total_amount`/`_currency` (default KRW), `approved_total_amount`/
+  `_currency` (nullable, set on approve); `posting_key` (set on approve); `doc_no` `DD-NNNNNN` (range
+  `trade.drawback_claim`, GLOBAL; doc_type `DD`).
+- `drawback_claim_item` — `claim_id` (FK, explicit name); `source_export_declaration_id` / `_item_ref`
+  (plain uuid, NO cross-domain FK); `source_acceptance_date` (수리일 snapshot); `hs_code`/`fob_amount`/
+  `fob_currency`/`fob_krw_amount` snapshots; `fx_rate` (18,**6**, NULL on manual override); `applied_rate`
+  (18,4, 0 when no rate); `line_refund_amount` (18,4). All amounts ≥ 0 (CHECK). UNIQUE (claim_id, line_no).
+  ⚠️ No UNIQUE on `source_export_declaration_item_ref` — source-unique deferred (see drawback domain rules).
+
 ## FI postings
 - export-declaration → **none** (영세율 customs document). Its linkage is the doc_flow `DECLARES` edge onto
-  the delivery's 601 GI, NOT a journal. (통관수수료 / 관세환급(duty-drawback) postings — Dr 관세환급금 미수금 /
-  Cr 관세환급수익 with a §5.4 refund calc — are a later slice.)
+  the delivery's 601 GI, NOT a journal.
 - import-declaration → **none** (RECORD document). Import accounting is the landed-cost document's job
   (Dr BSX/PRD + Dr 부가세대급금 1350 + Cr AP, at/after the GR); the declaration only writes a doc_flow `DECLARES`
   edge onto that same 수입 GR (101). Posting here would double-count — so it NEVER touches fi-posting.
+- duty-drawback (approve) → an `SA` journal (JE-<year> range): **Dr 관세환급금 미수금 1140 / Cr 관세환급수익
+  9830**, `approved_total` (KRW), via `JournalService.post(…, { tx })` (caller-tx). Keys
+  `DUTY_DRAWBACK_RECEIVABLE`/`_INCOME` → account_determination (§4.5). Idempotent on the claim
+  (`posting_key = drawback:<id>:approve`); lineage `drawback_claim` —`POSTS`→ journal (FI-reverse-fenced) +
+  —`REFUNDS`→ each distinct source `export_declaration`. The refund is 영업외수익, distinct from the
+  landed-cost-capitalized duty (no double-count: it touches ONLY 1140/9830, never inventory/COGS/PRD/AP).
 
 ## Domain events
-- None of its own yet (no FI ⇒ no journal outbox event). UNI-PASS 수리 / 적하목록 events arrive with the
+- export/import-declaration → none of their own (no FI). UNI-PASS 수리 / 적하목록 events arrive with the
   integration `unipass-connector` slice.
+- duty-drawback (approve) → rides the journal's outbox event (`finance.journal.posted`, reference
+  `trade.drawback_claim:<docNo>`, same tx) — no event of its own yet.
 
 ## Permissions
 `trade_compliance:export_declaration:{create,accept,read}` ·
-`trade_compliance:import_declaration:{create,accept,read}` (declared on the controllers; ADMIN `*` covers
-them).
+`trade_compliance:import_declaration:{create,accept,read}` ·
+`trade_compliance:duty_drawback:{create,approve,read}` (declared on the controllers; ADMIN `*` covers them).

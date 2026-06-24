@@ -1,6 +1,8 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import { schema, type Database } from '@erp/db';
 import { AppModule } from './app.module.js';
+import { DB } from './database/database.module.js';
 import { UsersService } from './domains/platform/auth/users.service.js';
 import { RbacService } from './domains/platform/rbac/rbac.service.js';
 import { NumberingService } from './domains/platform/numbering/numbering.service.js';
@@ -38,6 +40,7 @@ async function seed(): Promise<void> {
     const partners = app.get(BusinessPartnerService);
     const materials = app.get(MaterialService);
     const valuations = app.get(MaterialValuationService);
+    const db = app.get<Database>(DB);
 
     const username = process.env.ADMIN_USERNAME ?? 'admin';
     const password = process.env.ADMIN_PASSWORD ?? 'admin123';
@@ -147,6 +150,14 @@ async function seed(): Promise<void> {
       prefix: 'IM-',
       padding: 6,
     });
+    // Duty-drawback (관세환급, 간이정액) claim owns a global-scoped range (DD-NNNNNN), like ED-/IM-. Unlike the
+    // declarations it IS a posting document (approve → Dr 관세환급금 미수금 / Cr 관세환급수익), but the claim
+    // number range is identical in shape; the journal draws its own JE- number.
+    await numbering.defineRange({
+      object: 'trade.drawback_claim',
+      prefix: 'DD-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -216,6 +227,10 @@ async function seed(): Promise<void> {
       // class. Distinct from PRD (5900 재고원가차이): physical-count gain/loss is ledger-separable from
       // landed-cost price differences. Without it a 701/702 with a non-zero diff throws (no rule).
       { transactionKey: 'IDI', glAccount: '5910' }, // 재고조정손익 (physical-inventory adjustment offset)
+      // Duty-drawback slice (§4.5): the approve() journal Dr 관세환급금 미수금 / Cr 관세환급수익. The FIRST
+      // posting in trade-compliance — both accounts resolved here (never hard-coded, CLAUDE.md §4.5).
+      { transactionKey: 'DUTY_DRAWBACK_RECEIVABLE', glAccount: '1140' }, // 관세환급금미수금
+      { transactionKey: 'DUTY_DRAWBACK_INCOME', glAccount: '9830' }, // 관세환급수익 (영업외수익)
     ]) {
       await accounts.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -289,6 +304,12 @@ async function seed(): Promise<void> {
       // gain credits it / 702 loss debits it) at the current MAP. currency null (omitted) like the other
       // diff accounts. Separate from 5900 재고원가차이 (PRD) so count gain/loss is ledger-separable.
       { accountNumber: '5910', name: '재고조정손익', accountType: 'EXPENSE' as const },
+      // Duty-drawback slice: 관세환급금미수금 (current-asset receivable, 11xx band) — the approve() Dr leg.
+      // NON-reconciliation this slice (관세청 is not a BP; the 입금 클리어링 slice revisits this) so the posting
+      // line needs no partner_id.
+      { accountNumber: '1140', name: '관세환급금미수금', accountType: 'ASSET' as const },
+      // 관세환급수익 (영업외수익, 98xx band beside 9810 외환차익) — the approve() Cr leg.
+      { accountNumber: '9830', name: '관세환급수익', accountType: 'REVENUE' as const },
     ]) {
       await glAccounts.ensureGlAccount({
         chartOfAccounts: 'KR01',
@@ -404,11 +425,37 @@ async function seed(): Promise<void> {
       valuationClass: '3000',
     });
 
+    // Duty-drawback (간이정액) demo 환급률표: 원 per 10,000원 FOB, effective 2026-01-01 (open-ended). HS
+    // 8471606000 matches the seeded FG-1000 so a demo 수출→환급 produces a non-zero refund. Idempotent on
+    // (hs_code, valid_from). A second HS demonstrates the lookup; rates are illustrative, not statutory.
+    await db
+      .insert(schema.drawbackSimplifiedRate)
+      .values([
+        {
+          hsCode: '8471606000',
+          ratePer10k: '50.0000',
+          validFrom: '2026-01-01',
+          createdBy: 'system',
+          updatedBy: 'system',
+        },
+        {
+          hsCode: '8517120000',
+          ratePer10k: '120.0000',
+          validFrom: '2026-01-01',
+          createdBy: 'system',
+          updatedBy: 'system',
+        },
+      ])
+      .onConflictDoNothing({
+        target: [schema.drawbackSimplifiedRate.hsCode, schema.drawbackSimplifiedRate.validFrom],
+      });
+
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges (incl. sales ` +
-        `SO-/BL- + 실사 PI- + 수출신고 ED- + 수입신고 IM-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
-        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS/IDI) + ` +
-        `master data (5 currencies / 4 fx rates / 15 GL accounts / 4 tax codes / cost center 1000 / ` +
+        `SO-/BL- + 실사 PI- + 수출신고 ED- + 수입신고 IM- + 관세환급 DD-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS/IDI/DUTY_DRAWBACK) + ` +
+        `master data (5 currencies / 4 fx rates / 17 GL accounts / 4 tax codes / cost center 1000 / ` +
+        `2 간이정액환급률 (HS 8471606000 / 8517120000) / ` +
         `2 business partners: customer C1000 + vendor V2000 / 2 materials: FG-1000 + RM-2000 / ` +
         `2 material valuations at plant 1010: FG-1000=7920 + RM-2000=3000)`,
     );

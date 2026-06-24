@@ -23,3 +23,14 @@ export type ExportDeclarationStatus = z.infer<typeof exportDeclarationStatusSche
 export const IMPORT_DECLARATION_STATUS = ['SUBMITTED', 'ACCEPTED'] as const;
 export const importDeclarationStatusSchema = z.enum(IMPORT_DECLARATION_STATUS);
 export type ImportDeclarationStatus = z.infer<typeof importDeclarationStatusSchema>;
+
+/**
+ * Duty-drawback claim (관세환급 신청) lifecycle — 간이정액환급 (simplified fixed-rate refund of the customs
+ * duty paid on imported inputs that were re-exported). `CLAIMED` = the refund claim is filed against one or
+ * more 수출신고 (non-posting); `APPROVED` = 관세청 결정 → the FIRST real FI journal in trade-compliance posts
+ * (Dr 관세환급금 미수금 / Cr 관세환급수익). Validated by Zod here; enforced on the document table by a status
+ * CHECK. (개별환급 — BOM/소요량 전개 — is a later slice; this is 간이정액 only.)
+ */
+export const DRAWBACK_CLAIM_STATUS = ['CLAIMED', 'APPROVED'] as const;
+export const drawbackClaimStatusSchema = z.enum(DRAWBACK_CLAIM_STATUS);
+export type DrawbackClaimStatus = z.infer<typeof drawbackClaimStatusSchema>;

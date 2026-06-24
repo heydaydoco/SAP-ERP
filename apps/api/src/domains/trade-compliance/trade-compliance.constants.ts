@@ -76,3 +76,60 @@ export const GR_MOVEMENT_TYPE = '101';
 
 /** Number-range object — global-scoped, like the ED- range. doc_no = IM-NNNNNN. */
 export const NUMBER_OBJECT_IMPORT_DECLARATION = 'trade.import_declaration';
+
+// ── duty-drawback (관세환급, 간이정액) — the FIRST POSTING document of trade-compliance ────────────────
+
+/** Document type owned by the drawback claim. 'DD' / 'DD-' kept aligned (like ED/IM). */
+export const DOC_TYPE_DRAWBACK_CLAIM = 'DD';
+
+/** doc_flow node type (§4.3) — the drawback claim header. */
+export const DOC_FLOW_TYPE_DRAWBACK_CLAIM = 'trade_compliance.drawback_claim';
+
+/**
+ * doc_flow node type for the source 수출신고 a refund line draws from. Value EQUALS
+ * `DOC_FLOW_TYPE_EXPORT_DECLARATION` ('trade_compliance.export_declaration'); the distinct name documents
+ * that the claim's REFUNDS edge targets an export declaration. Referenced as a PLAIN STRING target (the
+ * doc_flow graph is generic — no FK, no cross-module import).
+ */
+export const DOC_FLOW_TYPE_DRAWBACK_SOURCE_EXPORT = 'trade_compliance.export_declaration';
+
+/** doc_flow node type for the FI journal a posted approve() spawns (finance.journal_entry). */
+export const DOC_FLOW_TYPE_JOURNAL = 'finance.journal_entry';
+
+/**
+ * doc_flow relationship: a drawback claim REFUNDS each DISTINCT source 수출신고 it draws on (newer document
+ * → the earlier document it derives from, like CAPITALIZES / DECLARES). NOT a POSTS edge. One edge per
+ * distinct source_export_declaration_id (the partial-payment CLEARS multi-edge convention). rel_type is a
+ * free-form varchar(32) on doc_flow — no migration needed to add this value.
+ */
+export const REL_REFUNDS = 'REFUNDS';
+
+/**
+ * doc_flow relationship: the claim POSTS its approve() FI journal (claim → journal_entry). The SAME literal
+ * 'POSTS' the FI reverse-guard checks (journal.service backward('POSTS')) — so the drawback journal is
+ * subledger-owned and a bare GL reversal is refused (correction = a future drawback-cancel).
+ */
+export const REL_POSTS = 'POSTS';
+
+/** Number-range object — global-scoped, like ED-/IM-. doc_no = DD-NNNNNN. */
+export const NUMBER_OBJECT_DRAWBACK_CLAIM = 'trade.drawback_claim';
+
+/**
+ * account_determination transaction keys for the approve() journal (§4.5 — never hard-coded). Seeded in
+ * apps/api/src/seed.ts as: DUTY_DRAWBACK_RECEIVABLE → 1140 관세환급금미수금 (ASSET) · DUTY_DRAWBACK_INCOME →
+ * 9830 관세환급수익 (REVENUE, 영업외). resolve() throws if a rule is missing (no code fallback).
+ */
+export const DUTY_DRAWBACK_RECEIVABLE_KEY = 'DUTY_DRAWBACK_RECEIVABLE';
+export const DUTY_DRAWBACK_INCOME_KEY = 'DUTY_DRAWBACK_INCOME';
+
+/** 환급기한 — 관세환급특례법: 수출신고 수리일로부터 2년 이내 신청 (the G2 deadline reference). */
+export const DRAWBACK_DEADLINE_YEARS = 2;
+/** G2: claim_date within this many days of the 환급기한 → 임박 WARN. */
+export const DRAWBACK_DEADLINE_WARN_DAYS = 60;
+
+/**
+ * 간이정액 line refund rounding policy (§5.4). HALF_UP (반올림) is the v1 default; the actual 관세청 규정
+ * (원미만 절사 가능성) is isolated as a calc parameter so a confirmed rule is a one-constant change + a test
+ * flip, never a logic rewrite.
+ */
+export const DRAWBACK_REFUND_ROUNDING = 'HALF_UP' as const;
