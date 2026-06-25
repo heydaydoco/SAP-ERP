@@ -17,3 +17,12 @@ export type TradeDirection = z.infer<typeof tradeDirectionSchema>;
 /** FCL / LCL container load. */
 export const fclLclSchema = z.enum(['FCL', 'LCL']);
 export type FclLcl = z.infer<typeof fclLclSchema>;
+
+/**
+ * Shipment (logistics-4pl.shipment) lifecycle — thin and forward-only: PLANNED (생성) → BOOKED (선사/운송서류
+ * 확정) → DEPARTED (출항) → ARRIVED (도착, terminal). A shipment is a NON-POSTING physical document (freight
+ * accounting is a later slice). Validated by Zod here; enforced on the document table by a status CHECK.
+ */
+export const SHIPMENT_STATUS = ['PLANNED', 'BOOKED', 'DEPARTED', 'ARRIVED'] as const;
+export const shipmentStatusSchema = z.enum(SHIPMENT_STATUS);
+export type ShipmentStatus = z.infer<typeof shipmentStatusSchema>;

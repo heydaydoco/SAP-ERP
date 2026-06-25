@@ -8,3 +8,4 @@ export * from './inventory-warehouse/index';
 export * from './procurement/index';
 export * from './sales/index';
 export * from './trade-compliance/index';
+export * from './logistics-4pl/index';
