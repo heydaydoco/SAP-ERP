@@ -47,7 +47,10 @@ export const importDeclaration = pgTable(
   {
     // §4.2 document spine: id, doc_type, doc_no, status, posting_key, audit-4.
     ...documentHeaderColumns(),
-    /** A declaration is created already SUBMITTED (filed); accept() flips it to ACCEPTED + stamps the MRN. */
+    /**
+     * A declaration is created already SUBMITTED (filed); accept() flips it to ACCEPTED + stamps the MRN.
+     * The UNI-PASS connector adds a terminal REJECTED (반려) — a 전송 that the 관세청 refuses (no MRN, no 수리일).
+     */
     status: varchar('status', { length: 16 }).notNull().default('SUBMITTED'),
     companyCodeId: uuid('company_code_id')
       .notNull()
@@ -107,7 +110,10 @@ export const importDeclaration = pgTable(
   },
   (t) => [
     unique('import_declaration_doc_no_uq').on(t.docNo),
-    check('import_declaration_status_ck', sql`${t.status} in ('SUBMITTED', 'ACCEPTED')`),
+    check(
+      'import_declaration_status_ck',
+      sql`${t.status} in ('SUBMITTED', 'ACCEPTED', 'REJECTED')`,
+    ),
     check('import_declaration_customs_value_nonneg_ck', sql`${t.customsValue} >= 0`),
     check('import_declaration_duty_nonneg_ck', sql`${t.dutyAmount} >= 0`),
     check('import_declaration_vat_nonneg_ck', sql`${t.importVatAmount} >= 0`),
