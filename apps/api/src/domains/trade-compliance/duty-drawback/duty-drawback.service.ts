@@ -17,6 +17,7 @@ import { DocFlowService } from '../../platform/doc-flow/doc-flow.service.js';
 import { AccountDeterminationService } from '../../platform/admin-config/account-determination.service.js';
 import { JournalService } from '../../finance-accounting/general-ledger/journal.service.js';
 import {
+  BANK_CLEARING_KEY,
   DOC_FLOW_TYPE_DRAWBACK_CLAIM,
   DOC_FLOW_TYPE_DRAWBACK_SOURCE_EXPORT,
   DOC_FLOW_TYPE_JOURNAL,
@@ -38,6 +39,7 @@ import type {
   ApproveDrawbackClaimDto,
   CreateDrawbackClaimDto,
   DrawbackClaimQuery,
+  ReceiptDrawbackClaimDto,
 } from './duty-drawback.dto.js';
 
 /** A computed claim line: the row to insert + its refund Money + the gate facts. */
@@ -363,6 +365,149 @@ export class DutyDrawbackService {
     return result;
   }
 
+  /**
+   * receipt (관세청 입금 → PAID) — the MIRROR of approve(): the FI journal that CLOSES the receivable approve
+   * opened, so the 1140 미수금 nets to 0 and the cycle completes. Idempotent on the claim: an already-PAID
+   * claim replays its live state (posts nothing); a non-APPROVED claim 409s (a CLAIMED claim must be
+   * approved first).
+   *   Dr 보통예금 (BANK_CLEARING)                      received(=approved_total)
+   *   Cr 관세환급금 미수금 (DUTY_DRAWBACK_RECEIVABLE)   received(=approved_total)
+   * KRW single-currency (KRW = functional), two-line, no FX. The journal is subledger-owned (claim —POSTS→),
+   * so a correction goes through a future receipt-cancel, never a bare GL reversal. v1 = FULL receipt only.
+   */
+  async receipt(id: string, dto: ReceiptDrawbackClaimDto, actor = 'system') {
+    const claim = await this.loadClaim(id);
+    // Idempotent replay: an already-paid claim returns its live state, posting nothing (§5.2 — the
+    // claim-level status guard owns exactly-once, so the caller-tx journal post is never re-entered).
+    if (claim.status === 'PAID') {
+      return this.toPaidResult(claim, true);
+    }
+    if (claim.status !== 'APPROVED') {
+      throw new ConflictException(
+        `drawback claim ${claim.docNo} is ${claim.status}; only an APPROVED claim can be 입금처리 (승인 먼저)`,
+      );
+    }
+
+    const company = await this.getCompany(claim.companyCodeId);
+    const functional = company.currency as CurrencyCode;
+    // approve guaranteed the approved total is non-null and non-zero; guard defensively before the Money parse.
+    if (!claim.approvedTotalAmount) {
+      throw new ConflictException(
+        `drawback claim ${claim.docNo} is APPROVED but has no approved total — cannot 입금처리`,
+      );
+    }
+    const approvedTotal = Money.fromNumeric(claim.approvedTotalAmount, functional, this.registry);
+    if (approvedTotal.isZero()) {
+      throw new BadRequestException(
+        `drawback claim ${claim.docNo} approved total is 0 — nothing to settle`,
+      );
+    }
+
+    // Full-receipt only (v1): a supplied 입금액 must equal the approved total — no partial receipt (the
+    // clearing slice's full-clearing reject pattern). fromNumeric (not Money.of) so a canonical '5000.0000'
+    // KRW input is accepted while genuine sub-won precision ('5000.5') still 400s.
+    if (dto.receivedAmount !== undefined) {
+      let received: Money;
+      try {
+        received = Money.fromNumeric(dto.receivedAmount, functional, this.registry);
+      } catch (e) {
+        throw new BadRequestException((e as Error).message);
+      }
+      if (!received.equals(approvedTotal)) {
+        throw new BadRequestException(
+          `부분입금은 스코프 밖: 입금액 ${dto.receivedAmount} must equal the approved total ` +
+            `${approvedTotal.toNumeric()} ${functional}`,
+        );
+      }
+    }
+
+    const postingKey = `drawback:${claim.id}:receipt`;
+
+    const result = await this.db.transaction(async (tx) => {
+      // Atomic transition guard FIRST: only a still-APPROVED row flips, so a concurrent receipt cannot
+      // double-post (the loser updates zero rows and 409s, rolling back before any journal is written).
+      const [flipped] = await tx
+        .update(schema.drawbackClaim)
+        .set({
+          status: 'PAID',
+          receiptDate: dto.receiptDate,
+          receivedAmount: approvedTotal.toNumeric(),
+          receivedCurrency: functional,
+          postingKey,
+          updatedBy: actor,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(schema.drawbackClaim.id, claim.id), eq(schema.drawbackClaim.status, 'APPROVED')))
+        .returning({ id: schema.drawbackClaim.id });
+      if (!flipped) {
+        throw new ConflictException(
+          `drawback claim ${claim.docNo} is no longer APPROVED — concurrent receipt`,
+        );
+      }
+
+      const bankAccount = await this.accountDetermination.resolve(
+        {
+          transactionKey: BANK_CLEARING_KEY,
+          chartOfAccounts: company.chartOfAccounts,
+          companyCode: company.code,
+        },
+        tx,
+      );
+      const receivableAccount = await this.accountDetermination.resolve(
+        {
+          transactionKey: DUTY_DRAWBACK_RECEIVABLE_KEY,
+          chartOfAccounts: company.chartOfAccounts,
+          companyCode: company.code,
+        },
+        tx,
+      );
+
+      const lines: PostingLine[] = [
+        { glAccount: bankAccount, drCr: 'D', money: approvedTotal, lineText: '관세환급금 입금' },
+        { glAccount: receivableAccount, drCr: 'C', money: approvedTotal, lineText: '관세환급금 미수 소거' },
+      ];
+      const posted = await this.journals.post(
+        {
+          postingKey,
+          companyCodeId: claim.companyCodeId,
+          postingDate: dto.receiptDate,
+          currency: functional,
+          reference: `trade.drawback_claim:${claim.docNo}`,
+          headerText: `관세환급입금 ${claim.docNo}`,
+          lines,
+        },
+        actor,
+        { tx },
+      );
+
+      // Subledger-owned: claim —POSTS→ journal (the FI reverse-guard refuses a bare GL reversal). This is the
+      // SECOND POSTS edge on the claim (approve wrote the first) — so replay recovers THIS journal by its
+      // deterministic posting key, never by scanning POSTS edges (which would ambiguously hit the approve one).
+      await this.docFlow.link(
+        {
+          sourceType: DOC_FLOW_TYPE_DRAWBACK_CLAIM,
+          sourceId: claim.id,
+          targetType: DOC_FLOW_TYPE_JOURNAL,
+          targetId: posted.journalId,
+          relType: REL_POSTS,
+        },
+        tx,
+      );
+
+      return {
+        drawbackClaimId: claim.id,
+        docNo: claim.docNo,
+        status: 'PAID' as const,
+        journalId: posted.journalId,
+        receivedAmount: approvedTotal.toNumeric(),
+        receivedCurrency: functional,
+        replayed: false,
+      };
+    });
+
+    return result;
+  }
+
   /** Header + items (line order) + outward lineage edges, or 404. */
   async getDrawbackClaim(id: string) {
     const claim = await this.loadClaim(id);
@@ -422,6 +567,32 @@ export class DutyDrawbackService {
       journalId,
       approvedTotalAmount: claim.approvedTotalAmount ?? '',
       approvedTotalCurrency: claim.approvedTotalCurrency ?? '',
+      replayed,
+    };
+  }
+
+  /**
+   * The receipt journal + the live PAID-state response (replay). A PAID claim carries TWO POSTS edges
+   * (approve's + receipt's), so the journal is recovered by its DETERMINISTIC posting key — not by scanning
+   * POSTS edges, which would ambiguously match the approve journal (see receipt()).
+   */
+  private async toPaidResult(claim: typeof schema.drawbackClaim.$inferSelect, replayed: boolean) {
+    const [journal] = await this.db
+      .select({ id: schema.journalEntry.id })
+      .from(schema.journalEntry)
+      .where(
+        and(
+          eq(schema.journalEntry.companyCodeId, claim.companyCodeId),
+          eq(schema.journalEntry.postingKey, `drawback:${claim.id}:receipt`),
+        ),
+      );
+    return {
+      drawbackClaimId: claim.id,
+      docNo: claim.docNo,
+      status: 'PAID' as const,
+      journalId: journal?.id ?? '',
+      receivedAmount: claim.receivedAmount ?? '',
+      receivedCurrency: claim.receivedCurrency ?? '',
       replayed,
     };
   }

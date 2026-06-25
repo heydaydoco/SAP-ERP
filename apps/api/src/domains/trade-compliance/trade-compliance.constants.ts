@@ -122,6 +122,15 @@ export const NUMBER_OBJECT_DRAWBACK_CLAIM = 'trade.drawback_claim';
 export const DUTY_DRAWBACK_RECEIVABLE_KEY = 'DUTY_DRAWBACK_RECEIVABLE';
 export const DUTY_DRAWBACK_INCOME_KEY = 'DUTY_DRAWBACK_INCOME';
 
+/**
+ * account_determination transaction key for the 보통예금/현금클리어링 account a 관세환급 입금 (receipt) lands
+ * on — the SAME literal string the finance-accounting clearing slice resolves (`BANK_CLEARING` → 1010,
+ * currency = null). account_determination is string-key based, so reusing the literal resolves to the same
+ * GL; sharing the KEY (not the account) keeps the receipt journal's cash leg consistent with AR/AP clearing.
+ * The closing leg reuses DUTY_DRAWBACK_RECEIVABLE_KEY (the 1140 approve opened, now credited to net 0).
+ */
+export const BANK_CLEARING_KEY = 'BANK_CLEARING';
+
 /** 환급기한 — 관세환급특례법: 수출신고 수리일로부터 2년 이내 신청 (the G2 deadline reference). */
 export const DRAWBACK_DEADLINE_YEARS = 2;
 /** G2: claim_date within this many days of the 환급기한 → 임박 WARN. */
