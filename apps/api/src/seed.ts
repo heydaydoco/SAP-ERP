@@ -158,6 +158,14 @@ async function seed(): Promise<void> {
       prefix: 'DD-',
       padding: 6,
     });
+    // Shipment (선적, 4PL logistics backbone) owns a global-scoped range (SH-NNNNNN), like ED-/IM-/DD-. The
+    // shipment is a NON-POSTING physical document (freight accounting is a later slice) — only this range is
+    // needed; the externally-issued B/L·AWB number is a separate manual string field.
+    await numbering.defineRange({
+      object: 'logistics.shipment',
+      prefix: 'SH-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -452,7 +460,7 @@ async function seed(): Promise<void> {
 
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges (incl. sales ` +
-        `SO-/BL- + 실사 PI- + 수출신고 ED- + 수입신고 IM- + 관세환급 DD-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `SO-/BL- + 실사 PI- + 수출신고 ED- + 수입신고 IM- + 관세환급 DD- + 선적 SH-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS/IDI/DUTY_DRAWBACK) + ` +
         `master data (5 currencies / 4 fx rates / 17 GL accounts / 4 tax codes / cost center 1000 / ` +
         `2 간이정액환급률 (HS 8471606000 / 8517120000) / ` +
