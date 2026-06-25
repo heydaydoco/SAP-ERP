@@ -5,7 +5,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { schema, type Database } from '@erp/db';
 import { OrgStructureService } from '../../src/domains/platform/org-structure/org-structure.service.js';
 import { FiscalPeriodService } from '../../src/domains/platform/admin-config/fiscal-period.service.js';
@@ -223,6 +223,8 @@ describe.skipIf(!dockerAvailable)('trade-compliance 관세환급 (duty drawback,
       // Duty-drawback accounts under test.
       { accountNumber: '1140', name: '관세환급금미수금', accountType: 'ASSET' as const },
       { accountNumber: '9830', name: '관세환급수익', accountType: 'REVENUE' as const },
+      // 보통예금/현금클리어링 (currency null by omission) — where the 환급금 입금(receipt) lands (BANK_CLEARING).
+      { accountNumber: '1010', name: '보통예금', accountType: 'ASSET' as const },
     ]) {
       await glAccounts.ensureGlAccount({ chartOfAccounts: 'KR01', isReconciliation: false, ...acc });
     }
@@ -233,6 +235,8 @@ describe.skipIf(!dockerAvailable)('trade-compliance 관세환급 (duty drawback,
       { transactionKey: 'FX_ROUNDING', glAccount: '9800' },
       { transactionKey: 'DUTY_DRAWBACK_RECEIVABLE', glAccount: '1140' },
       { transactionKey: 'DUTY_DRAWBACK_INCOME', glAccount: '9830' },
+      // receipt() cash leg — the same BANK_CLEARING key the finance clearing slice uses (→ 1010).
+      { transactionKey: 'BANK_CLEARING', glAccount: '1010' },
     ]) {
       await accountDet.defineRule({ chartOfAccounts: 'KR01', ...rule });
     }
@@ -506,5 +510,138 @@ describe.skipIf(!dockerAvailable)('trade-compliance 관세환급 (duty drawback,
     );
     const line = (await drawbacks.getDrawbackClaim(created.drawbackClaimId)).items[0]!;
     expect(line.hsCode).toBe(''); // deterministic NOT-NULL snapshot for the missing case
+  });
+
+  // 8 — receipt (입금) lifecycle: approve opens the 1140 receivable; receipt posts the MIRROR journal
+  //     Dr 1010 보통예금 / Cr 1140, flips APPROVED → PAID, and the 1140 미수금 nets to 0 across both journals.
+  it('approve → receipt posts the mirror Dr 1010 / Cr 1140 once, nets 1140 to 0, and flips to PAID', async () => {
+    const mat = await newTradeMaterial('8471606000');
+    const src = await acceptedExport(mat, '1000000', 'KRW', '2026-03-10');
+    const created = await drawbacks.create({
+      companyCodeId,
+      claimDate: '2026-04-01',
+      items: [{ sourceExportDeclarationId: src.declarationId, sourceExportDeclarationItemRef: src.itemId }],
+    });
+    const approved = await drawbacks.approve(created.drawbackClaimId, { approvalDate: '2026-04-10' });
+    // approve OPENED the receivable: Dr 1140 = 5,000.
+    expect(await lineAmount(approved.journalId, '1140')).toEqual([{ drCr: 'D', amount: '5000.0000' }]);
+
+    const journalsBeforeReceipt = await journalCount();
+    const paid = await drawbacks.receipt(created.drawbackClaimId, { receiptDate: '2026-04-20' });
+    expect(paid).toMatchObject({
+      status: 'PAID',
+      replayed: false,
+      receivedAmount: '5000.0000',
+      receivedCurrency: 'KRW',
+    });
+    // receipt posts exactly ONE new journal.
+    expect(await journalCount()).toBe(journalsBeforeReceipt + 1);
+
+    // Mirror journal: Dr 1010 보통예금 / Cr 1140 관세환급금미수금 = 5,000원 (balanced, two lines).
+    expect(await lineAmount(paid.journalId, '1010')).toEqual([{ drCr: 'D', amount: '5000.0000' }]);
+    expect(await lineAmount(paid.journalId, '1140')).toEqual([{ drCr: 'C', amount: '5000.0000' }]);
+
+    // 1140 미수금 nets to 0 across the cycle (approve Dr 5,000 + receipt Cr 5,000) — the claim is settled.
+    const lines1140 = await db
+      .select({ drCr: schema.journalLine.drCr, amount: schema.journalLine.amount })
+      .from(schema.journalLine)
+      .where(
+        and(
+          eq(schema.journalLine.glAccount, '1140'),
+          inArray(schema.journalLine.journalEntryId, [approved.journalId, paid.journalId]),
+        ),
+      );
+    const net1140 = lines1140.reduce((s, l) => s + (l.drCr === 'D' ? 1 : -1) * Number(l.amount), 0);
+    expect(net1140).toBe(0);
+
+    // The claim status row is PAID with the input stamps recorded.
+    const header = await drawbacks.getDrawbackClaim(created.drawbackClaimId);
+    expect(header).toMatchObject({
+      status: 'PAID',
+      receiptDate: '2026-04-20',
+      receivedAmount: '5000.0000',
+      receivedCurrency: 'KRW',
+    });
+
+    // POSTS edge: claim → receipt journal. The claim now carries TWO POSTS edges (approve + receipt);
+    // the receipt's targets the NEW journal (subledger-owned, FI reverse-fenced).
+    const postsEdges = await db
+      .select()
+      .from(schema.docFlow)
+      .where(
+        and(
+          eq(schema.docFlow.sourceType, DOC_FLOW_TYPE_DRAWBACK_CLAIM),
+          eq(schema.docFlow.sourceId, created.drawbackClaimId),
+          eq(schema.docFlow.relType, REL_POSTS),
+        ),
+      );
+    expect(postsEdges).toHaveLength(2);
+    expect(new Set(postsEdges.map((e) => e.targetId))).toEqual(
+      new Set([approved.journalId, paid.journalId]),
+    );
+  });
+
+  // 9 — receipt is idempotent on the claim: a replay posts NOTHING and returns the same journal (the
+  //     deterministic posting key recovers THIS journal, not the approve one, despite two POSTS edges).
+  it('replays an already-PAID claim — no second journal, same journalId', async () => {
+    const mat = await newTradeMaterial('8471606000');
+    const src = await acceptedExport(mat, '1000000', 'KRW', '2026-03-10');
+    const created = await drawbacks.create({
+      companyCodeId,
+      claimDate: '2026-04-01',
+      items: [{ sourceExportDeclarationId: src.declarationId, sourceExportDeclarationItemRef: src.itemId }],
+    });
+    await drawbacks.approve(created.drawbackClaimId, { approvalDate: '2026-04-10' });
+    const paid = await drawbacks.receipt(created.drawbackClaimId, { receiptDate: '2026-04-20' });
+
+    const journalsAfterFirst = await journalCount();
+    const replay = await drawbacks.receipt(created.drawbackClaimId, { receiptDate: '2026-04-20' });
+    expect(replay).toMatchObject({
+      status: 'PAID',
+      replayed: true,
+      journalId: paid.journalId,
+      receivedAmount: '5000.0000',
+      receivedCurrency: 'KRW',
+    });
+    expect(await journalCount()).toBe(journalsAfterFirst);
+  });
+
+  // 10 — state guard: only an APPROVED claim can be 입금처리. A still-CLAIMED claim 409s (approve first).
+  it('refuses receipt on a non-APPROVED (CLAIMED) claim', async () => {
+    const mat = await newTradeMaterial('8471606000');
+    const src = await acceptedExport(mat, '1000000', 'KRW', '2026-03-10');
+    const created = await drawbacks.create({
+      companyCodeId,
+      claimDate: '2026-04-01',
+      items: [{ sourceExportDeclarationId: src.declarationId, sourceExportDeclarationItemRef: src.itemId }],
+    });
+    await expect(
+      drawbacks.receipt(created.drawbackClaimId, { receiptDate: '2026-04-20' }),
+    ).rejects.toThrow(/only an APPROVED claim/);
+  });
+
+  // 11 — full-receipt only (v1): a 입금액 ≠ 승인액 is rejected; the exact approved total (incl. the
+  //      canonical '5000.0000') is accepted.
+  it('rejects a partial receipt and accepts the exact approved total', async () => {
+    const mat = await newTradeMaterial('8471606000');
+    const src = await acceptedExport(mat, '1000000', 'KRW', '2026-03-10');
+    const created = await drawbacks.create({
+      companyCodeId,
+      claimDate: '2026-04-01',
+      items: [{ sourceExportDeclarationId: src.declarationId, sourceExportDeclarationItemRef: src.itemId }],
+    });
+    await drawbacks.approve(created.drawbackClaimId, { approvalDate: '2026-04-10' }); // 승인액 5,000
+
+    // Partial (4,000 ≠ 5,000) → 400, BEFORE any state change (claim stays APPROVED).
+    await expect(
+      drawbacks.receipt(created.drawbackClaimId, { receiptDate: '2026-04-20', receivedAmount: '4000' }),
+    ).rejects.toThrow(/부분입금은 스코프 밖/);
+
+    // The exact approved total IS accepted — including the canonical NUMERIC '5000.0000' (fromNumeric path).
+    const paid = await drawbacks.receipt(created.drawbackClaimId, {
+      receiptDate: '2026-04-20',
+      receivedAmount: '5000.0000',
+    });
+    expect(paid).toMatchObject({ status: 'PAID', receivedAmount: '5000.0000' });
   });
 });

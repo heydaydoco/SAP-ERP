@@ -134,6 +134,13 @@
       "when": 1782265924401,
       "tag": "0018_panoramic_micromax",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782352833292,
+      "tag": "0019_motionless_photon",
+      "breakpoints": true
     }
   ]
 }

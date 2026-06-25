@@ -52,6 +52,19 @@ export const approveDrawbackClaimSchema = z.object({
 });
 export type ApproveDrawbackClaimDto = z.infer<typeof approveDrawbackClaimSchema>;
 
+/**
+ * receipt(): 관세청 입금 → post the MIRROR journal (Dr 보통예금 / Cr 관세환급금 미수금) closing the receivable.
+ * v1 is FULL receipt only — `receivedAmount` is optional and, when supplied, MUST equal the approved total
+ * (a mismatch is a 400; omit it to settle the approved total in full).
+ */
+export const receiptDrawbackClaimSchema = z.object({
+  /** 환급금 입금일 (관세청 실제 입금일). */
+  receiptDate: isoDate,
+  /** 입금액 (KRW); omit to settle the approved total in full. When present it must equal the approved total. */
+  receivedAmount: amountSchema.optional(),
+});
+export type ReceiptDrawbackClaimDto = z.infer<typeof receiptDrawbackClaimSchema>;
+
 export const drawbackClaimQuerySchema = paginationQuerySchema.extend({
   companyCodeId: z.string().uuid().optional(),
   status: drawbackClaimStatusSchema.optional(),

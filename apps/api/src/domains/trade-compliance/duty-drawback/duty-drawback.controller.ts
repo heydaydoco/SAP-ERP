@@ -9,9 +9,11 @@ import {
   approveDrawbackClaimSchema,
   createDrawbackClaimSchema,
   drawbackClaimQuerySchema,
+  receiptDrawbackClaimSchema,
   type ApproveDrawbackClaimDto,
   type CreateDrawbackClaimDto,
   type DrawbackClaimQuery,
+  type ReceiptDrawbackClaimDto,
 } from './duty-drawback.dto.js';
 
 @Controller('trade-compliance')
@@ -36,6 +38,17 @@ export class DutyDrawbackController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.drawbacks.approve(id, dto, user.username);
+  }
+
+  /** receipt (관세청 입금): post the mirror FI journal (Dr 보통예금 / Cr 관세환급금 미수금) and flip APPROVED → PAID. */
+  @RequirePermissions('trade_compliance:duty_drawback:receipt')
+  @Post('drawback-claims/:id/receipt')
+  receipt(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(receiptDrawbackClaimSchema)) dto: ReceiptDrawbackClaimDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.drawbacks.receipt(id, dto, user.username);
   }
 
   @RequirePermissions('trade_compliance:duty_drawback:read')

@@ -23,8 +23,9 @@ import { companyCode } from '../platform/org-structure';
  * framework. (개별환급 — BOM/소요량 전개 — and 환급금 입금 클리어링 are later slices.)
  *
  * Lifecycle: CLAIMED (filed, **non-posting**) → APPROVED (관세청 결정, the FI journal posts; idempotent on
- * the claim — a replay returns the live state, never double-posts). The refund is KRW (KRW=functional), so
- * the journal is single-currency, two-line, no FX.
+ * the claim — a replay returns the live state, never double-posts) → PAID (관세청 입금, the MIRROR journal
+ * Dr 보통예금 / Cr 관세환급금 미수금 closes the receivable approve opened; idempotent on the claim). The refund
+ * is KRW (KRW=functional), so both journals are single-currency, two-line, no FX.
  */
 
 /**
@@ -85,15 +86,24 @@ export const drawbackClaim = pgTable(
     /** 관세청 결정 환급액 (KRW) — set on approve (defaults to claimed); may differ (결정액 우선). NULL until then. */
     approvedTotalAmount: moneyCol('approved_total_amount'),
     approvedTotalCurrency: currencyCol('approved_total_currency'),
+    /** 환급금 입금일 (관세청 실제 입금) — stamped on receipt(); NULL until 입금. Mirrors approval_date. */
+    receiptDate: date('receipt_date', { mode: 'string' }),
+    /** 입금액 (KRW) — set on receipt; v1 enforces 전액 (= approved_total). NULL until then. Mirrors approved_total_amount. */
+    receivedAmount: moneyCol('received_amount'),
+    receivedCurrency: currencyCol('received_currency'),
     headerText: varchar('header_text', { length: 256 }),
   },
   (t) => [
     unique('drawback_claim_doc_no_uq').on(t.docNo),
-    check('drawback_claim_status_ck', sql`${t.status} in ('CLAIMED', 'APPROVED')`),
+    check('drawback_claim_status_ck', sql`${t.status} in ('CLAIMED', 'APPROVED', 'PAID')`),
     check('drawback_claim_claimed_total_nonneg_ck', sql`${t.claimedTotalAmount} >= 0`),
     check(
       'drawback_claim_approved_total_nonneg_ck',
       sql`${t.approvedTotalAmount} is null or ${t.approvedTotalAmount} >= 0`,
+    ),
+    check(
+      'drawback_claim_received_amount_nonneg_ck',
+      sql`${t.receivedAmount} is null or ${t.receivedAmount} >= 0`,
     ),
     index('drawback_claim_company_idx').on(t.companyCodeId),
     index('drawback_claim_status_idx').on(t.status),
