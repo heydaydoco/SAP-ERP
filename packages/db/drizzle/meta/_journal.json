@@ -155,6 +155,13 @@
       "when": 1782369547055,
       "tag": "0021_fixed_lily_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1782456029195,
+      "tag": "0022_familiar_thunderbolt_ross",
+      "breakpoints": true
     }
   ]
 }
