@@ -9,8 +9,14 @@
 /** Document type (SAP BLART/essence) owned by the shipment. 'SH' / 'SH-' kept aligned (like ED/IM/DD). */
 export const DOC_TYPE_SHIPMENT = 'SH';
 
+/** Document type for a freight settlement (운임 정산) — the domain's first FI document. 'FR' / 'FR-' aligned. */
+export const DOC_TYPE_FREIGHT = 'FR';
+
 /** doc_flow node type (§4.3) — the shipment header (item-granularity edges are not written). */
 export const DOC_FLOW_TYPE_SHIPMENT = 'logistics_4pl.shipment';
+
+/** doc_flow node type for a freight settlement; SETTLES → its shipment, POSTS → its KR journal. */
+export const DOC_FLOW_TYPE_FREIGHT_SETTLEMENT = 'logistics_4pl.freight_settlement';
 
 /**
  * doc_flow node type for the DELIVERY (출고전표) a shipment carries — the physical lineage target, keyed by
@@ -29,5 +35,29 @@ export const DOC_FLOW_TYPE_DELIVERY = 'sales.delivery';
  */
 export const REL_CONTAINS = 'CONTAINS';
 
+/**
+ * doc_flow relationship: a freight settlement SETTLES a shipment — the freight document → the earlier 선적 it
+ * is the freight cost for (lineage/drill-down only; NOT a POSTS edge). Direction: freight_settlement → shipment.
+ */
+export const REL_SETTLES = 'SETTLES';
+
+/**
+ * doc_flow relationship: a freight settlement POSTS its KR journal. `POSTS` matches the literal the FI
+ * reverse-guard checks (same as procurement landed-cost / IV) — the freight's KR journal is thereby
+ * subledger-owned (FI reverse refused; correction is a future freight-cancel, not a bare GL reversal).
+ * Direction: freight_settlement → journal.
+ */
+export const REL_POSTS = 'POSTS';
+
+/**
+ * account_determination transaction key for 지급운임 (freight expense, the Dr leg of a freight settlement).
+ * Resolved from the config table per chart of accounts — never hard-coded (§4.5), like WRX/PRD/COGS.
+ */
+export const FREIGHT_KEY = 'FREIGHT';
+
 /** Number-range object (SAP Number Range) — global-scoped, like the ED-/IM-/DD- ranges. doc_no = SH-NNNNNN. */
 export const NUMBER_OBJECT_SHIPMENT = 'logistics.shipment';
+
+/** Number-range object for freight settlements — global-scoped like SH-. doc_no = FR-NNNNNN (the KR journal
+ * it raises draws the finance.ap_invoice KR range). */
+export const NUMBER_OBJECT_FREIGHT = 'logistics.freight_settlement';
