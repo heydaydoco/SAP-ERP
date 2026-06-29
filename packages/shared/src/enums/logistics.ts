@@ -36,3 +36,24 @@ export type ShippingDocKind = z.infer<typeof shippingDocKindSchema>;
 export const SHIPMENT_STATUS = ['PLANNED', 'BOOKED', 'DEPARTED', 'ARRIVED'] as const;
 export const shipmentStatusSchema = z.enum(SHIPMENT_STATUS);
 export type ShipmentStatus = z.infer<typeof shipmentStatusSchema>;
+
+/**
+ * Tracking event type (화물추적 마일스톤) — the observable cargo milestones logged against a shipment.
+ * This is a pure OBSERVATION log, **separate from the shipment status machine (`SHIPMENT_STATUS`)**: the two
+ * enums are NEVER synchronized or converted into each other, even where names overlap (DEPARTED/ARRIVED) — a
+ * tracking event NEVER drives the shipment lifecycle, and the lifecycle never emits a tracking event. The
+ * milestones are append-only and the same type may legitimately recur (e.g. IN_TRANSIT per 환적). Validated by
+ * Zod here; enforced on the `tracking_event.event_type` column by a CHECK (the `doc_kind` pattern).
+ */
+export const TRACKING_EVENT_TYPE = [
+  'GATE_IN',
+  'LOADED',
+  'DEPARTED',
+  'IN_TRANSIT',
+  'ARRIVED',
+  'DISCHARGED',
+  'GATE_OUT',
+  'DELIVERED',
+] as const;
+export const trackingEventTypeSchema = z.enum(TRACKING_EVENT_TYPE);
+export type TrackingEventType = z.infer<typeof trackingEventTypeSchema>;

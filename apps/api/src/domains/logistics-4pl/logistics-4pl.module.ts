@@ -10,6 +10,8 @@ import { FreightSettlementController } from './freight-settlement/freight-settle
 import { FreightSettlementService } from './freight-settlement/freight-settlement.service.js';
 import { ShippingDocumentController } from './shipping-document/shipping-document.controller.js';
 import { ShippingDocumentService } from './shipping-document/shipping-document.service.js';
+import { TrackingEventController } from './tracking-event/tracking-event.controller.js';
+import { TrackingEventService } from './tracking-event/tracking-event.service.js';
 
 /**
  * Logistics-4PL domain module (SAP TM/forwarding). `shipment` (선적) is the non-posting backbone (Phase 8 slice
@@ -19,8 +21,10 @@ import { ShippingDocumentService } from './shipping-document/shipping-document.s
  * (`AccountDeterminationService` — the FREIGHT key) and MasterDataModule (`BusinessPartnerService` recon
  * substitution + `CurrencyService`/`DbCurrencyRegistry` for the document-rate stamp). `shipping-document`
  * (선적 서류세트 — B/L·CI·PL) is NON-POSTING like the shipment, so it needs only PlatformModule (`DocFlowService`)
- * + NumberingModule (no Finance/AdminConfig/MasterData). Cross-domain reads (the shipment, for existence +
- * company check) go through `@Inject(DB)` directly, READ-ONLY.
+ * + NumberingModule (no Finance/AdminConfig/MasterData). `tracking-event` (화물추적) is leaner still — a
+ * header-less, non-posting observation log keyed by `shipment_id`, with NO doc_flow edge and NO numbering, so
+ * it needs only `@Inject(DB)`. Cross-domain reads (the shipment, for existence + company check) go through
+ * `@Inject(DB)` directly, READ-ONLY.
  */
 @Module({
   imports: [
@@ -30,8 +34,23 @@ import { ShippingDocumentService } from './shipping-document/shipping-document.s
     MasterDataModule,
     FinanceAccountingModule,
   ],
-  providers: [ShipmentService, FreightSettlementService, ShippingDocumentService],
-  controllers: [ShipmentController, FreightSettlementController, ShippingDocumentController],
-  exports: [ShipmentService, FreightSettlementService, ShippingDocumentService],
+  providers: [
+    ShipmentService,
+    FreightSettlementService,
+    ShippingDocumentService,
+    TrackingEventService,
+  ],
+  controllers: [
+    ShipmentController,
+    FreightSettlementController,
+    ShippingDocumentController,
+    TrackingEventController,
+  ],
+  exports: [
+    ShipmentService,
+    FreightSettlementService,
+    ShippingDocumentService,
+    TrackingEventService,
+  ],
 })
 export class Logistics4plModule {}

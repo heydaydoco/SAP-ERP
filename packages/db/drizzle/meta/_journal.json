@@ -169,6 +169,13 @@
       "when": 1782696575631,
       "tag": "0023_blushing_zaladane",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1782707148585,
+      "tag": "0024_living_titanium_man",
+      "breakpoints": true
     }
   ]
 }
