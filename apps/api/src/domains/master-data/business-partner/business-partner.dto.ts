@@ -49,6 +49,26 @@ export const createVendorRoleSchema = z.object({
 });
 export type CreateVendorRoleDto = z.infer<typeof createVendorRoleSchema>;
 
+/**
+ * Carrier role (운송인) — NON-POSTING, so no reconciliation account (unlike customer/vendor). Carries the
+ * carrier's mode-split identity codes only; both optional (a 해상 carrier has only a SCAC, an 항공 carrier only
+ * an IATA code, and the role may exist before either is keyed in). No cross-field rule — the role itself is the
+ * flag. Empty strings are rejected by the 2-char minimum in each regex.
+ */
+export const createCarrierRoleSchema = z.object({
+  /** SCAC — Standard Carrier Alpha Code, 2–4 uppercase letters (육상·해상 carrier). */
+  scac: z
+    .string()
+    .regex(/^[A-Z]{2,4}$/, 'scac must be 2–4 uppercase letters (SCAC)')
+    .optional(),
+  /** IATA airline code — 2–3 alphanumeric uppercase (항공 carrier). */
+  iataCode: z
+    .string()
+    .regex(/^[0-9A-Z]{2,3}$/, 'iataCode must be 2–3 uppercase alphanumeric (IATA airline code)')
+    .optional(),
+});
+export type CreateCarrierRoleDto = z.infer<typeof createCarrierRoleSchema>;
+
 export const bpQuerySchema = paginationQuerySchema.extend({
   bpType: bpTypeSchema.optional(),
 });

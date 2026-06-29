@@ -10,15 +10,17 @@ import { schema, type Database } from '@erp/db';
 import { DB } from '../../../database/database.module.js';
 import type {
   CreateBpDto,
+  CreateCarrierRoleDto,
   CreateCustomerRoleDto,
   CreateVendorRoleDto,
 } from './business-partner.dto.js';
 
 /**
  * Business-partner master service (master-data.business-partner). One core partner with optional
- * customer (AR) / vendor (AP) role extensions (§4.4). `create*` enforces uniqueness for the API;
- * idempotent `ensure*` helpers back the seed. Role writes validate that the reconciliation account
- * exists in the GL master so AR/AP postings (Phase 2) resolve.
+ * customer (AR) / vendor (AP) / carrier (운송, NON-POSTING) role extensions (§4.4). `create*` enforces
+ * uniqueness for the API; idempotent `ensure*` helpers back the seed. AR/AP role writes validate that the
+ * reconciliation account exists in the GL master so postings (Phase 2) resolve — the carrier role has NO
+ * reconciliation account (it posts nothing), so it skips that check entirely.
  */
 @Injectable()
 export class BusinessPartnerService {
@@ -74,7 +76,7 @@ export class BusinessPartnerService {
     return row?.count ?? 0;
   }
 
-  /** The core partner plus whichever roles it has (customer/vendor), or null where a role is absent. */
+  /** The core partner plus whichever roles it has (customer/vendor/carrier), or null where absent. */
   async getBp(id: string) {
     const [bp] = await this.db
       .select()
@@ -86,7 +88,8 @@ export class BusinessPartnerService {
       .from(schema.customer)
       .where(eq(schema.customer.bpId, id));
     const [vendor] = await this.db.select().from(schema.vendor).where(eq(schema.vendor.bpId, id));
-    return { ...bp, customer: customer ?? null, vendor: vendor ?? null };
+    const [carrier] = await this.db.select().from(schema.carrier).where(eq(schema.carrier.bpId, id));
+    return { ...bp, customer: customer ?? null, vendor: vendor ?? null, carrier: carrier ?? null };
   }
 
   // ── customer role ──────────────────────────────────────────────────────────
@@ -147,6 +150,34 @@ export class BusinessPartnerService {
       .onConflictDoNothing({ target: schema.vendor.bpId });
   }
 
+  // ── carrier role ───────────────────────────────────────────────────────────
+
+  async addCarrierRole(bpId: string, dto: CreateCarrierRoleDto, actor = 'system') {
+    await this.assertBpExists(bpId);
+    // NON-POSTING role: there is NO reconciliation account to validate (unlike customer/vendor) — a carrier
+    // raises no AR/AP subledger, so this never touches the GL master (assertReconAccount is intentionally absent).
+    const existing = await this.db
+      .select({ id: schema.carrier.id })
+      .from(schema.carrier)
+      .where(eq(schema.carrier.bpId, bpId));
+    if (existing.length > 0) {
+      throw new ConflictException(`business partner ${bpId} already has a carrier role`);
+    }
+    const [row] = await this.db
+      .insert(schema.carrier)
+      .values({ ...this.carrierValues(bpId, dto), createdBy: actor, updatedBy: actor })
+      .returning();
+    return row;
+  }
+
+  async ensureCarrierRole(bpId: string, dto: CreateCarrierRoleDto, actor = 'system'): Promise<void> {
+    // NON-POSTING role: no reconciliation account to validate.
+    await this.db
+      .insert(schema.carrier)
+      .values({ ...this.carrierValues(bpId, dto), createdBy: actor, updatedBy: actor })
+      .onConflictDoNothing({ target: schema.carrier.bpId });
+  }
+
   // ── helpers ────────────────────────────────────────────────────────────────
 
   private bpValues(dto: CreateBpDto) {
@@ -178,6 +209,14 @@ export class BusinessPartnerService {
       apReconAccount: dto.apReconAccount,
       paymentTermsDays: dto.paymentTermsDays ?? null,
       purchasingBlock: dto.purchasingBlock,
+    };
+  }
+
+  private carrierValues(bpId: string, dto: CreateCarrierRoleDto) {
+    return {
+      bpId,
+      scac: dto.scac ?? null,
+      iataCode: dto.iataCode ?? null,
     };
   }
 
