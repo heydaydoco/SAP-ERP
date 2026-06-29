@@ -174,6 +174,14 @@ async function seed(): Promise<void> {
       prefix: 'FR-',
       padding: 6,
     });
+    // Shipping document set (선적 서류세트, B/L·CI·PL) — a NON-POSTING physical record bundling the trade
+    // shipping documents issued for one shipment; owns a global-scoped range (SD-NNNNNN), like SH-/FR-. It
+    // posts nothing (only the document numbers are recorded) — so only this document range is new.
+    await numbering.defineRange({
+      object: 'logistics.shipping_document',
+      prefix: 'SD-',
+      padding: 6,
+    });
 
     // Demo enterprise structure: company 1000 (KRW) → plant 1010 → storage location 101A,
     // plus a sales + purchasing org. Idempotent, so the seed stays re-runnable.
@@ -474,7 +482,7 @@ async function seed(): Promise<void> {
 
     console.warn(
       `[seed] admin user '${username}' ready with ADMIN role (*) + demo number ranges (incl. sales ` +
-        `SO-/BL- + 실사 PI- + 수출신고 ED- + 수입신고 IM- + 관세환급 DD- + 선적 SH- + 운임정산 FR-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
+        `SO-/BL- + 실사 PI- + 수출신고 ED- + 수입신고 IM- + 관세환급 DD- + 선적 SH- + 운임정산 FR- + 선적서류 SD-) + enterprise structure (company 1000 / plant 1010 / sloc 101A) + ` +
         `fiscal year 2026 (12 open periods) + KR01 account determination (incl. BSX/GBB/WRX/PRD/COGS/IDI/DUTY_DRAWBACK/FREIGHT) + ` +
         `master data (5 currencies / 4 fx rates / 18 GL accounts / 4 tax codes / cost center 1000 / ` +
         `2 간이정액환급률 (HS 8471606000 / 8517120000) / ` +

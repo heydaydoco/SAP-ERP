@@ -162,6 +162,13 @@
       "when": 1782456029195,
       "tag": "0022_familiar_thunderbolt_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1782696575631,
+      "tag": "0023_blushing_zaladane",
+      "breakpoints": true
     }
   ]
 }

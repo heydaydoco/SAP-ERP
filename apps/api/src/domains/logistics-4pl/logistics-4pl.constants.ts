@@ -12,11 +12,20 @@ export const DOC_TYPE_SHIPMENT = 'SH';
 /** Document type for a freight settlement (운임 정산) — the domain's first FI document. 'FR' / 'FR-' aligned. */
 export const DOC_TYPE_FREIGHT = 'FR';
 
+/**
+ * Document type for a shipping document set (선적 서류세트 — B/L·CI·PL bundled per shipment). 'SD' / 'SD-'
+ * aligned (free across domains — sales uses SO/DL/BL). A NON-POSTING physical record, like the shipment.
+ */
+export const DOC_TYPE_SHIPPING_DOC = 'SD';
+
 /** doc_flow node type (§4.3) — the shipment header (item-granularity edges are not written). */
 export const DOC_FLOW_TYPE_SHIPMENT = 'logistics_4pl.shipment';
 
 /** doc_flow node type for a freight settlement; SETTLES → its shipment, POSTS → its KR journal. */
 export const DOC_FLOW_TYPE_FREIGHT_SETTLEMENT = 'logistics_4pl.freight_settlement';
+
+/** doc_flow node type for a shipping document set; DOCUMENTS → its shipment (physical lineage, no journal). */
+export const DOC_FLOW_TYPE_SHIPPING_DOCUMENT = 'logistics_4pl.shipping_document';
 
 /**
  * doc_flow node type for the DELIVERY (출고전표) a shipment carries — the physical lineage target, keyed by
@@ -50,6 +59,13 @@ export const REL_SETTLES = 'SETTLES';
 export const REL_POSTS = 'POSTS';
 
 /**
+ * doc_flow relationship: a shipping document set DOCUMENTS a shipment — the 서류 묶음 → the earlier 선적 it
+ * documents (physical lineage/drill-down only; NOT a POSTS edge — the set owns no journal, like
+ * export_declaration's DECLARES). Direction: shipping_document_set → shipment.
+ */
+export const REL_DOCUMENTS = 'DOCUMENTS';
+
+/**
  * account_determination transaction key for 지급운임 (freight expense, the Dr leg of a freight settlement).
  * Resolved from the config table per chart of accounts — never hard-coded (§4.5), like WRX/PRD/COGS.
  */
@@ -61,3 +77,6 @@ export const NUMBER_OBJECT_SHIPMENT = 'logistics.shipment';
 /** Number-range object for freight settlements — global-scoped like SH-. doc_no = FR-NNNNNN (the KR journal
  * it raises draws the finance.ap_invoice KR range). */
 export const NUMBER_OBJECT_FREIGHT = 'logistics.freight_settlement';
+
+/** Number-range object for shipping document sets — global-scoped like SH-/FR-. doc_no = SD-NNNNNN. */
+export const NUMBER_OBJECT_SHIPPING_DOC = 'logistics.shipping_document';
