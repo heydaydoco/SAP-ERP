@@ -176,6 +176,13 @@
       "when": 1782707148585,
       "tag": "0024_living_titanium_man",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1782710021679,
+      "tag": "0025_unknown_silver_surfer",
+      "breakpoints": true
     }
   ]
 }

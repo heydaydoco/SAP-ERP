@@ -8,10 +8,12 @@ import { BusinessPartnerService } from './business-partner.service.js';
 import {
   bpQuerySchema,
   createBpSchema,
+  createCarrierRoleSchema,
   createCustomerRoleSchema,
   createVendorRoleSchema,
   type BpQuery,
   type CreateBpDto,
+  type CreateCarrierRoleDto,
   type CreateCustomerRoleDto,
   type CreateVendorRoleDto,
 } from './business-partner.dto.js';
@@ -67,5 +69,16 @@ export class BusinessPartnerController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.bp.addVendorRole(id, dto, user.username);
+  }
+
+  /** Carrier (운송인 — 선사/항공사) role — NON-POSTING (no reconciliation account). */
+  @RequirePermissions('master_data:business_partner:manage_role')
+  @Post('business-partners/:id/carrier-role')
+  addCarrierRole(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(createCarrierRoleSchema)) dto: CreateCarrierRoleDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.bp.addCarrierRole(id, dto, user.username);
   }
 }
