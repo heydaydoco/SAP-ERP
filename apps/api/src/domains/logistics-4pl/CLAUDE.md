@@ -15,14 +15,17 @@
   the trade shipping documents issued for a shipment, bundled (header metadata only) into an OPEN set + N lines.
 - `cargo-tracking` 🟧 — **화물추적 (tracking event) shipped** (Phase 8 slice 4, migration 0024). Non-posting,
   header-less, append-only observation timeline hung off a shipment — INDEPENDENT of the shipment status machine.
+- `carrier-booking` 🟧 — **운송수배 (carrier booking) shipped** (Phase 8 slice 5, migration 0026). Non-posting;
+  a carrier (선사) reservation against a shipment (booking no. + cut-offs). The FIRST consumer of the `carrier` BP
+  role (0025). INDEPENDENT of the shipment status machine.
 - `freight-forwarding` (MBL/HBL/콘솔) · `logistics-billing` (화주 청구 + 예정/실제 accrual + 건별 마진) ·
-  `transportation` · `shipment-booking` · `control-tower` · `customs-brokerage` ·
+  `transportation` · `control-tower` · `customs-brokerage` ·
   `3pl-warehouse` · `logistics-document` (full B/L·CI·PL content lines + PDF generation) — later.
 
 ## Status
-🟧 **In progress (Phase 8 slice 4 shipped: cargo tracking 화물추적, migration 0024; on top of slice 3's shipping
-document set 선적 서류세트, migration 0023, slice 2's freight settlement 운임 정산, migration 0022, and slice 1's
-shipment 선적 backbone, migration 0021).** The **shipment** is the non-posting physical backbone — one transport
+🟧 **In progress (Phase 8 slice 5 shipped: carrier booking 운송수배, migration 0026; on top of slice 4's cargo
+tracking 화물추적, migration 0024, slice 3's shipping document set 선적 서류세트, migration 0023, slice 2's freight
+settlement 운임 정산, migration 0022, and slice 1's shipment 선적 backbone, migration 0021).** The **shipment** is the non-posting physical backbone — one transport
 unit ("this cargo sails/flies out on this vessel/flight") bundling one or more **deliveries** (출고전표), forward-only
 lifecycle **create (PLANNED) → book (BOOKED) → depart (DEPARTED) → arrive (ARRIVED)**.
 **Freight settlement** is now the domain's **FIRST FI document**: a forwarder freight invoice hung off a shipment
@@ -44,13 +47,22 @@ even where names overlap like DEPARTED/ARRIVED). Header-less (no doc_no, no doc_
 is the `shipment_id` column alone, because `tracking_event` is a high-volume partitioned/archived log (§3-C.5),
 not a document in the doc_flow chain. The same `event_type` may recur (IN_TRANSIT per 환적); the timeline reads
 `event_time` asc (decoupled from `line_no`, which is intake order).
+**Carrier booking** is the domain's fourth non-posting concern: a reservation placed with a carrier (선사) for a
+shipment, registering the carrier's booking number and cut-off deadlines (cargo / 서류 / VGM, all nullable until
+the carrier confirms). It is the **FIRST consumer of the `carrier` BP role (0025)** — `carrier_bp_id` is validated
+to carry a carrier role (**no recon** — the carrier role is non-posting). It **posts NOTHING** (freight is the
+separate freight_settlement) and **NEVER touches the shipment status machine** (PLANNED→BOOKED is
+`shipment.book()`'s job — booking is a separate physical document). Its only linkage is a doc_flow **`BOOKS`** edge
+→ its shipment. OPEN-only in v1; a shipment may hold multiple bookings (re-booking).
 **Deferred (freight settlement):** per-charge-type cost-account split (v1 is ONE summed amount; no items table),
 domestic 내륙운송 VAT, planned/estimated→actual freight accrual + per-shipment **sell/margin** (the 4PL heart),
 freight-settlement cancel/reversal. **Deferred (shipping document set):** set 완결/COMPLETED transition, per-document
 content lines (CI 단가 / PL 포장명세), document PDF generation/이메일 발송. **Deferred (cargo tracking):** automated
 event ingestion (UNI-PASS 화물진행 / 선사 EDI — v1 is manual entry; the `source` provenance column lands with that
-feed), milestone→status correlation, ETA recompute. **Deferred (domain):** container/CBM optimization, WMS
-picking, forwarder EDI, booking automation — all later slices.
+feed), milestone→status correlation, ETA recompute. **Deferred (carrier booking):** confirm/cancel transitions,
+D/O (Delivery Order), container/seal/equipment/movement-type + items-level rows, VGM measured values, carrier-EDI
+booking submission (v1 is manual registration). **Deferred (domain):** container/CBM optimization, WMS picking,
+forwarder EDI — all later slices.
 
 > **Note:** Heart of the system: per-shipment cost vs sell at charge granularity, planned→actual accrual,
 > real-time margin → FI. Margin math needs Vitest unit tests (§5.4). Detail: @docs/domains/logistics-4pl.md.
@@ -118,8 +130,18 @@ picking, forwarder EDI, booking automation — all later slices.
   (wrong-company → 400, unknown → 404). The same `event_type` may recur (NO `(shipment_id, event_type)` unique);
   `line_no` is intake order (a bounded retry absorbs the concurrent-append race) while the timeline reads
   `event_time` asc.
+- **A carrier booking posts NOTHING to FI and NEVER touches the shipment status machine.** It registers a carrier
+  (선사) reservation (booking no. + cargo/서류/VGM cut-offs, all nullable) against a shipment — freight is the
+  separate freight_settlement, so no `JournalService`/account-determination/`posting_key`/money/FX. Booking is a
+  separate physical document from the shipment lifecycle: it never reads or writes `shipment.status` (that is
+  `shipment.book()`'s job). `shipment_id` and `carrier_bp_id` are PLAIN uuids (no cross-domain FK); the service
+  resolves BOTH READ-ONLY — the shipment (wrong-company → 400, unknown → 404) and the carrier BP, which must carry
+  a `carrier` role (else 400; **NO recon substitution** — unlike freight's vendor role, the carrier role is
+  non-posting and has no reconciliation account). The FIRST consumer of the `carrier` BP role (0025). One doc_flow
+  **`BOOKS`** edge → its shipment (physical lineage, NOT a POSTS edge). **OPEN**-only in v1; NO `(shipment_id)` or
+  `booking_no` unique — a shipment may be re-booked / hold multiple bookings.
 
-## Key tables (migrations 0021, 0022, 0023, 0024)
+## Key tables (migrations 0021, 0022, 0023, 0024, 0026)
 - `shipment` (0021) — §4.2 header, status ∈ PLANNED/BOOKED/DEPARTED/ARRIVED (CHECK); `company_code_id`;
   `transport_mode` (CHECK ∈ SEA/AIR/RAIL/TRUCK); `carrier`/`vessel_flight_no`/`transport_doc_no` (B/L·AWB,
   nullable until 부킹)/`port_of_loading`/`port_of_discharge`/`etd`/`eta` (all nullable); `doc_no` `SH-NNNNNN`
@@ -146,11 +168,18 @@ picking, forwarder EDI, booking automation — all later slices.
   `unique(shipment_id, line_no)` (NO `(shipment_id, event_type)` unique — duplicates legitimate); ONE index
   `(shipment_id, event_time)` for the chronological timeline (its left prefix also serves `shipment_id` lookups,
   so no separate `shipment_id`-only index — §3-C.5 write-amplification). No money/FX/currency columns.
+- `carrier_booking` (0026) — §4.2 header, **OPEN-only** (CHECK `in ('OPEN')`); `company_code_id` (FK);
+  `shipment_id` + `carrier_bp_id` (both plain uuid, NO cross-domain FK — doc_flow + service-side validation carry
+  the relationships); `booking_no` varchar(64); `cargo_cutoff`/`doc_cutoff`/`vgm_cutoff` timestamptz (all
+  nullable); `reference`/`header_text`; `doc_no` `CB-NNNNNN` (range `logistics.carrier_booking`, GLOBAL; doc_type
+  `CB`). No money/FX/currency columns (non-posting; inherited `posting_key` unused). NO unique on `shipment_id` or
+  `booking_no` (re-booking allowed). The carrier BP role itself is `master-data` migration 0025.
 
 ## FI postings
 - shipment → **none** (physical document); its linkage is the doc_flow `CONTAINS` edge per delivery.
 - shipping document set → **none** (physical record); its linkage is the doc_flow `DOCUMENTS` edge → its shipment.
 - cargo tracking event → **none** (observation log); NO doc_flow edge at all — lineage is the `shipment_id` column.
+- carrier booking → **none** (reservation document); its linkage is the doc_flow `BOOKS` edge → its shipment.
 - freight settlement → `KR` via `JournalService.post(…, { tx })`: **Dr 지급운임 (FREIGHT) / Cr AP recon (gross,
   +forwarder partner)**. A FOREIGN invoice translates at the document-date 'M' rate (or `fxRate` override) —
   recon leg carries its functional amount, so it ties out in both currencies (no FX_ROUNDING). Lineage:
@@ -159,11 +188,13 @@ picking, forwarder EDI, booking automation — all later slices.
 
 ## Domain events
 - shipment → none. shipping document set → none (non-posting). cargo tracking event → none (an observation log
-  emits no domain event of its own in v1). freight settlement → none of its own; its value-moving fact rides the
-  journal outbox event (`finance.journal.posted`, same tx). Margin events arrive with later slices.
+  emits no domain event of its own in v1). carrier booking → none (non-posting). freight settlement → none of its
+  own; its value-moving fact rides the journal outbox event (`finance.journal.posted`, same tx). Margin events
+  arrive with later slices.
 
 ## Permissions
 `logistics_4pl:shipment:{create,book,depart,arrive,read}` ·
 `logistics_4pl:freight_settlement:{post,read}` ·
 `logistics_4pl:shipping_document:{create,read}` ·
-`logistics_4pl:tracking_event:{create,read}` (declared on the controllers; ADMIN `*` covers them).
+`logistics_4pl:tracking_event:{create,read}` ·
+`logistics_4pl:carrier_booking:{create,read}` (declared on the controllers; ADMIN `*` covers them).

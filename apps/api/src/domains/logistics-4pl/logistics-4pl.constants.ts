@@ -18,6 +18,12 @@ export const DOC_TYPE_FREIGHT = 'FR';
  */
 export const DOC_TYPE_SHIPPING_DOC = 'SD';
 
+/**
+ * Document type for a carrier booking (운송수배 — 선사 예약). 'CB' / 'CB-' aligned (free across domains). A
+ * NON-POSTING physical document, like the shipment / shipping-doc (freight is the separate freight_settlement).
+ */
+export const DOC_TYPE_CARRIER_BOOKING = 'CB';
+
 /** doc_flow node type (§4.3) — the shipment header (item-granularity edges are not written). */
 export const DOC_FLOW_TYPE_SHIPMENT = 'logistics_4pl.shipment';
 
@@ -26,6 +32,9 @@ export const DOC_FLOW_TYPE_FREIGHT_SETTLEMENT = 'logistics_4pl.freight_settlemen
 
 /** doc_flow node type for a shipping document set; DOCUMENTS → its shipment (physical lineage, no journal). */
 export const DOC_FLOW_TYPE_SHIPPING_DOCUMENT = 'logistics_4pl.shipping_document';
+
+/** doc_flow node type for a carrier booking; BOOKS → its shipment (physical lineage, no journal). */
+export const DOC_FLOW_TYPE_CARRIER_BOOKING = 'logistics_4pl.carrier_booking';
 
 /**
  * doc_flow node type for the DELIVERY (출고전표) a shipment carries — the physical lineage target, keyed by
@@ -66,6 +75,13 @@ export const REL_POSTS = 'POSTS';
 export const REL_DOCUMENTS = 'DOCUMENTS';
 
 /**
+ * doc_flow relationship: a carrier booking BOOKS a shipment — the 예약 문서 → the earlier 선적 it reserves
+ * carrier capacity for (physical lineage/drill-down only; NOT a POSTS edge — the booking owns no journal, like
+ * shipping-document's DOCUMENTS). Direction: carrier_booking → shipment.
+ */
+export const REL_BOOKS = 'BOOKS';
+
+/**
  * account_determination transaction key for 지급운임 (freight expense, the Dr leg of a freight settlement).
  * Resolved from the config table per chart of accounts — never hard-coded (§4.5), like WRX/PRD/COGS.
  */
@@ -80,3 +96,6 @@ export const NUMBER_OBJECT_FREIGHT = 'logistics.freight_settlement';
 
 /** Number-range object for shipping document sets — global-scoped like SH-/FR-. doc_no = SD-NNNNNN. */
 export const NUMBER_OBJECT_SHIPPING_DOC = 'logistics.shipping_document';
+
+/** Number-range object for carrier bookings — global-scoped like SH-/FR-/SD-. doc_no = CB-NNNNNN. */
+export const NUMBER_OBJECT_CARRIER_BOOKING = 'logistics.carrier_booking';
