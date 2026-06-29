@@ -19,6 +19,16 @@ export const fclLclSchema = z.enum(['FCL', 'LCL']);
 export type FclLcl = z.infer<typeof fclLclSchema>;
 
 /**
+ * Shipping document kind (선적 서류 종류) — the physical trade documents bundled into a shipping document set.
+ * BL = Bill of Lading (선하증권) / AWB (항공운송장) included · CI = Commercial Invoice (상업송장) ·
+ * PL = Packing List (포장명세서). A shipping document set is a NON-POSTING physical record (it moves no value —
+ * the invoice amount was already accounted at SD billing). Validated by Zod here; enforced on the document
+ * table's `doc_kind` column by a CHECK (the shipment `transport_mode` pattern).
+ */
+export const shippingDocKindSchema = z.enum(['BL', 'CI', 'PL']);
+export type ShippingDocKind = z.infer<typeof shippingDocKindSchema>;
+
+/**
  * Shipment (logistics-4pl.shipment) lifecycle — thin and forward-only: PLANNED (생성) → BOOKED (선사/운송서류
  * 확정) → DEPARTED (출항) → ARRIVED (도착, terminal). A shipment is a NON-POSTING physical document (freight
  * accounting is a later slice). Validated by Zod here; enforced on the document table by a status CHECK.
